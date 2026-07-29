@@ -1,7 +1,11 @@
 import asyncio
 import sqlite3
 from mcp.server.fastmcp import FastMCP, Context
-from .tools import get_batch_details_handler, initiate_product_recall_handler
+from .tools import (
+    get_batch_details_handler, 
+    initiate_product_recall_handler,
+    analyze_batch_discrepancy_with_sampling_handler
+)
 from .schemas import GET_BATCH_DETAILS_SCHEMA, INITIATE_RECALL_SCHEMA
 from .notifications import notify_tools_list_changed
 
@@ -41,7 +45,6 @@ async def authenticate_user_session(employee_id: int, ctx: Context) -> dict:
 
 @mcp.resource("policy://quality-approval")
 def get_quality_policy() -> str:
-    """Read-only company policy regarding quality approvals."""
     try:
         conn = sqlite3.connect("db/vellora_therapeutics.db")
         cursor = conn.cursor()
@@ -54,7 +57,6 @@ def get_quality_policy() -> str:
 
 @mcp.prompt()
 def recall_investigation_prompt(batch_id: int) -> str:
-    """Canned prompt template to start a batch recall investigation."""
     return f"Investigate manufacturing batch #{batch_id}. Check all quality test results, active ingredients, and generate a recall risk assessment report."
 
 @mcp.tool(
@@ -67,6 +69,13 @@ async def run_batch_safety_audit(batch_id: int, ctx: Context) -> dict:
         await asyncio.sleep(1)
         await ctx.report_progress(progress=step, total=total_steps)
     return {"success": True, "message": f"Full safety audit completed for Batch #{batch_id}."}
+
+@mcp.tool(
+    name="analyze_batch_discrepancy_with_sampling",
+    description="Analyze batch safety logs using client-side sampling reasoning via sampling/createMessage."
+)
+async def analyze_batch_discrepancy_with_sampling(batch_id: int, ctx: Context) -> str:
+    return await analyze_batch_discrepancy_with_sampling_handler(batch_id, ctx)
 
 if __name__ == "__main__":
     mcp.run()
