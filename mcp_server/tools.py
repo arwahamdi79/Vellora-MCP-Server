@@ -1,21 +1,24 @@
 import sqlite3
-from typing import Dict, Any
 from mcp.server.fastmcp import Context
 from mcp.types import SamplingMessage, TextContent
+from .schemas import GET_BATCH_DETAILS_SCHEMA, INITIATE_RECALL_SCHEMA
+from .validation import validate_tool_args
+from .authorization import verify_employee_permissions
+from .elicitation import request_human_confirmation
 
+DB_PATH = "db/vellora_therapeutics.db"
 
-from mcp_server.schemas import BATCH_DETAILS_SCHEMA, RECALL_SCHEMA, AUTHENTICATE_SCHEMA, SAFETY_AUDIT_SCHEMA
-from mcp_server.validation import validate_input
-from mcp_server.authorization import check_employee_status, check_qa_manager_role
-from mcp_server.elicitation import create_recall_elicitation
-from mcp_server.notifications import notify_tools_list_changed
-from mcp_server.database import get_db_connection
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-
-
-def get_batch_details(batch_id: int) -> Dict[str, Any]:
-    """Fetch details and status of a manufacturing batch by its Batch ID."""
-    validate_input({"batch_id": batch_id}, BATCH_DETAILS_SCHEMA)
+def get_batch_details_handler(payload: dict) -> dict:
+    is_valid, error_msg = validate_tool_args(payload, GET_BATCH_DETAILS_SCHEMA)
+    if not is_valid:
+        return {"error": error_msg}
+        
+    batch_id = payload["batch_id"]
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -28,27 +31,28 @@ def get_batch_details(batch_id: int) -> Dict[str, Any]:
     
     return dict(row)
 
-
-
-async def initiate_product_recall(batch_id: int, recall_reason: str, authorized_manager_id: int, ctx: Context) -> str:
-    """Initiate a recall for a compromised batch. Requires QA Manager role & explicit confirmation."""
-    payload = {
-        "batch_id": batch_id,
-        "recall_reason": recall_reason,
-        "authorized_manager_id": authorized_manager_id
-    }
-    validate_input(payload, RECALL_SCHEMA)
+async def initiate_product_recall_handler(ctx: Context, payload: dict) -> dict:
+    is_valid, error_msg = validate_tool_args(payload, INITIATE_RECALL_SCHEMA)
+    if not is_valid:
+        return {"success": False, "message": error_msg}
     
-
-    check_employee_status(authorized_manager_id)
-    check_qa_manager_role(authorized_manager_id)
+    batch_id = payload["batch_id"]
+    recall_reason = payload["recall_reason"]
+    manager_id = payload["authorized_manager_id"]
     
-
-    confirmed = await create_recall_elicitation(ctx, batch_id, recall_reason)
+    is_authorized, auth_msg = verify_employee_permissions(
+        db_path=DB_PATH,
+        employee_id=manager_id,
+        allowed_roles=["QA Manager", "Manager", "Admin"]
+    )
+    if not is_authorized:
+        return {"success": False, "message": auth_msg}
+    
+    action_desc = f"Initiate product recall for Batch #{batch_id}. Reason: {recall_reason}"
+    confirmed = await request_human_confirmation(ctx, action_desc)
     if not confirmed:
-        return f"⛔ Recall operation for Batch #{batch_id} was cancelled by user."
+        return {"success": False, "message": f"Recall operation for Batch #{batch_id} was cancelled by user."}
     
-
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -58,54 +62,19 @@ async def initiate_product_recall(batch_id: int, recall_reason: str, authorized_
     conn.commit()
     conn.close()
     
-    return f"✅ SUCCESS: Batch #{batch_id} has been officially RECALLED."
+    return {"success": True, "message": f"Batch #{batch_id} has been officially RECALLED."}
 
-
-async def authenticate_user_session(employee_id: int, ctx: Context) -> str:
-    """Authenticate user to elevate session role and update dynamic tools list."""
-    validate_input({"employee_id": employee_id}, AUTHENTICATE_SCHEMA)
-    check_employee_status(employee_id)
-    
-
-    await notify_tools_list_changed(ctx)
-    return f"✅ User #{employee_id} authenticated successfully. Capabilities list refreshed."
-
-
-
-async def run_batch_safety_audit(batch_id: int, ctx: Context) -> str:
-    """Run a full safety audit on a batch with progress tracking."""
-    validate_input({"batch_id": batch_id}, SAFETY_AUDIT_SCHEMA)
-    
-    total_steps = 3
-    await ctx.report_progress(1, total_steps)
-
-    batch_info = get_batch_details(batch_id)
-    
-    await ctx.report_progress(2, total_steps)
-
-    
-    await ctx.report_progress(3, total_steps)
-
-    
-    return f"✅ Audit completed for Batch #{batch_id}: All parameters meet compliance standards."
-
-
-async def analyze_batch_discrepancy_with_sampling(batch_id: int, ctx: Context) -> str:
-    """Analyze batch safety logs using client-side sampling reasoning via create_message."""
-    
-
-    batch_info = get_batch_details(batch_id)
+async def analyze_batch_discrepancy_with_sampling_handler(batch_id: int, ctx: Context) -> str:
+    batch_info = get_batch_details_handler({"batch_id": batch_id})
     if "error" in batch_info:
         return f"Cannot perform sampling analysis: {batch_info['error']}"
     
-
     prompt_text = (
         f"You are a Quality Assurance Specialist at Vellora Therapeutics. "
         f"Analyze the following batch report for potential anomalies or safety concerns: {batch_info}"
     )
 
     try:
-
         sampling_response = await ctx.session.create_message(
             messages=[
                 SamplingMessage(
@@ -116,7 +85,6 @@ async def analyze_batch_discrepancy_with_sampling(batch_id: int, ctx: Context) -
             max_tokens=150
         )
         
-
         if hasattr(sampling_response.content, 'text'):
             analysis_text = sampling_response.content.text
         elif isinstance(sampling_response.content, list) and len(sampling_response.content) > 0:
@@ -127,5 +95,4 @@ async def analyze_batch_discrepancy_with_sampling(batch_id: int, ctx: Context) -
         return f"✅ Sampling Analysis Result:\n{analysis_text}"
 
     except Exception as e:
-
-        return f" Client does not support sampling/createMessage: {str(e)}"
+        return f"⚠️ Client does not support sampling/createMessage: {str(e)}"
