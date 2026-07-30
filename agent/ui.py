@@ -1,3 +1,7 @@
+"""
+Console UI
+"""
+
 from rich.console import Console
 
 console = Console()
@@ -5,28 +9,63 @@ console = Console()
 
 def welcome():
 
-    console.rule("[bold blue]Vellora Therapeutics AI Assistant[/bold blue]")
+    console.rule(
+        "[bold blue]Vellora Therapeutics AI Assistant[/bold blue]"
+    )
 
     console.print(
-        "Connected to Gemini + MCP Server\n",
-        style="green"
+        "Connected to Gemini + MCP Server",
+        style="green",
     )
+
+    console.print()
 
 
 def user_input():
 
-    return console.input("[bold cyan]You > [/bold cyan]")
+    return console.input(
+        "[bold cyan]You[/bold cyan] > "
+    )
 
 
 def assistant_output(text):
 
+    console.print()
+
+    console.rule("[green]Assistant[/green]")
+
+    console.print(text)
+
+    console.print()
+
+
+def info(text):
+
     console.print(
-        f"\n[bold green]Assistant[/bold green]\n{text}\n"
+        text,
+        style="cyan",
+    )
+
+
+def success(text):
+
+    console.print(
+        text,
+        style="green",
+    )
+
+
+def warning(text):
+
+    console.print(
+        text,
+        style="yellow",
     )
 
 
 def error(text):
 
     console.print(
-        f"[bold red]{text}[/bold red]"
+        text,
+        style="red",
     )
