@@ -47,3 +47,123 @@ class MCPClient:
     async def disconnect(self):
 
         await self.exit_stack.aclose()
+
+    # ================================
+    # Discovery Methods
+    # ================================
+
+    async def discover_tools(self):
+
+        result = await self.session.list_tools()
+
+        self.tools = result.tools
+
+        return self.tools
+
+    async def discover_resources(self):
+
+        result = await self.session.list_resources()
+
+        self.resources = result.resources
+
+        return self.resources
+
+    async def discover_prompts(self):
+
+        result = await self.session.list_prompts()
+
+        self.prompts = result.prompts
+
+        return self.prompts
+
+    async def discover_everything(self):
+
+        await self.discover_tools()
+
+        await self.discover_resources()
+
+        await self.discover_prompts()
+
+    # ================================
+    # Tool / Resource / Prompt
+    # ================================
+
+    async def call_tool(
+        self,
+        tool_name,
+        arguments
+    ):
+
+        return await self.session.call_tool(
+            tool_name,
+            arguments
+        )
+
+    async def read_resource(
+        self,
+        uri
+    ):
+
+        return await self.session.read_resource(uri)
+
+    async def get_prompt(
+        self,
+        name,
+        arguments
+    ):
+
+        return await self.session.get_prompt(
+            name=name,
+            arguments=arguments
+        )
+
+    # ================================
+    # Helper Functions
+    # ================================
+
+    def tool_descriptions(self):
+
+        text = ""
+
+        for tool in self.tools:
+
+            text += f"""
+Tool:
+{tool.name}
+
+Description:
+{tool.description}
+
+"""
+
+        return text
+
+    def resource_descriptions(self):
+
+        text = ""
+
+        for resource in self.resources:
+
+            text += f"""
+Resource:
+
+{resource.uri}
+
+"""
+
+        return text
+
+    def prompt_descriptions(self):
+
+        text = ""
+
+        for prompt in self.prompts:
+
+            text += f"""
+Prompt:
+
+{prompt.name}
+
+"""
+
+        return text
