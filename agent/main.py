@@ -1,42 +1,37 @@
 import asyncio
 
 from config import SERVER_PATH
-from mcp_client import MCPClient
+from agent import VelloraAgent
+from ui import (
+    welcome,
+    user_input,
+    assistant_output
+)
 
 
 async def main():
-    # Create an MCP client instance
-    client = MCPClient(SERVER_PATH)
 
-    try:
-        # Connect to the MCP Server
-        await client.connect()
+    agent = VelloraAgent(SERVER_PATH)
 
-        # Discover all available capabilities
-        await client.discover_everything()
+    await agent.initialize()
 
-        # Display all available tools
-        print("\n========== TOOLS ==========\n")
+    welcome()
 
-        for tool in client.tools:
-            print(tool.name)
+    while True:
 
-        # Display all available resources
-        print("\n========== RESOURCES ==========\n")
+        message = user_input()
 
-        for resource in client.resources:
-            print(resource.uri)
+        if message.lower() in ["exit", "quit"]:
 
-        # Display all available prompts
-        print("\n========== PROMPTS ==========\n")
+            break
 
-        for prompt in client.prompts:
-            print(prompt.name)
+        response = await agent.process_message(message)
 
-    finally:
-        # Close the connection gracefully
-        await client.disconnect()
+        assistant_output(response)
+
+    await agent.shutdown()
 
 
 if __name__ == "__main__":
+
     asyncio.run(main())
