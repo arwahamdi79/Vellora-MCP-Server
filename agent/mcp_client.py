@@ -1,7 +1,24 @@
+"""
+MCP Client
+
+Responsible for communicating with the MCP Server.
+
+Responsibilities
+----------------
+- Connect to the MCP Server
+- Discover available Tools / Resources / Prompts
+- Execute Tools
+- Read Resources
+- Retrieve Prompts
+"""
+
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
+from mcp.client.stdio import (
+    stdio_client,
+    StdioServerParameters,
+)
 
 
 class MCPClient:
@@ -12,47 +29,67 @@ class MCPClient:
 
         self.exit_stack = AsyncExitStack()
 
-        self.session = None
+        self.session: ClientSession | None = None
+
+        self.connected = False
 
         self.tools = []
-
         self.resources = []
-
         self.prompts = []
+
+    # =====================================================
+    # Connection
+    # =====================================================
 
     async def connect(self):
 
-        server = StdioServerParameters(
-            command="python",
-            args=[self.server_path]
-        )
+        try:
 
-        stdio_transport = await self.exit_stack.enter_async_context(
-            stdio_client(server)
-        )
-
-        read_stream, write_stream = stdio_transport
-
-        self.session = await self.exit_stack.enter_async_context(
-            ClientSession(
-                read_stream,
-                write_stream
+            server = StdioServerParameters(
+                command="python",
+                args=[self.server_path],
             )
-        )
 
-        await self.session.initialize()
+            transport = await self.exit_stack.enter_async_context(
+                stdio_client(server)
+            )
 
-        print("Connected to MCP Server")
+            read_stream, write_stream = transport
+
+            self.session = await self.exit_stack.enter_async_context(
+                ClientSession(
+                    read_stream,
+                    write_stream,
+                )
+            )
+
+            await self.session.initialize()
+
+            self.connected = True
+
+            print("✅ Connected to MCP Server")
+
+        except Exception as e:
+
+            self.connected = False
+
+            raise RuntimeError(
+                f"Failed to connect to MCP Server.\n{e}"
+            )
 
     async def disconnect(self):
 
+        self.connected = False
+
         await self.exit_stack.aclose()
 
-    # ================================
-    # Discovery Methods
-    # ================================
+    # =====================================================
+    # Discovery
+    # =====================================================
 
     async def discover_tools(self):
+
+        self._ensure_connection()
 
         result = await self.session.list_tools()
 
@@ -62,6 +99,8 @@ class MCPClient:
 
     async def discover_resources(self):
 
+        self._ensure_connection()
+
         result = await self.session.list_resources()
 
         self.resources = result.resources
@@ -69,6 +108,8 @@ class MCPClient:
         return self.resources
 
     async def discover_prompts(self):
+
+        self._ensure_connection()
 
         result = await self.session.list_prompts()
 
@@ -84,86 +125,169 @@ class MCPClient:
 
         await self.discover_prompts()
 
-    # ================================
-    # Tool / Resource / Prompt
-    # ================================
+        print()
+
+        print("========== MCP Discovery ==========")
+
+        print(f"Tools      : {len(self.tools)}")
+
+        print(f"Resources  : {len(self.resources)}")
+
+        print(f"Prompts    : {len(self.prompts)}")
+
+        print("===================================")
+
+        print()
+
+    # =====================================================
+    # Tool Calls
+    # =====================================================
 
     async def call_tool(
         self,
-        tool_name,
-        arguments
+        tool_name: str,
+        arguments: dict,
     ):
+
+        self._ensure_connection()
 
         return await self.session.call_tool(
             tool_name,
-            arguments
+            arguments,
         )
+
+    # =====================================================
+    # Resources
+    # =====================================================
 
     async def read_resource(
         self,
-        uri
+        uri: str,
     ):
+
+        self._ensure_connection()
 
         return await self.session.read_resource(uri)
 
+    # =====================================================
+    # Prompts
+    # =====================================================
+
     async def get_prompt(
         self,
-        name,
-        arguments
+        name: str,
+        arguments: dict,
     ):
+
+        self._ensure_connection()
 
         return await self.session.get_prompt(
             name=name,
-            arguments=arguments
+            arguments=arguments,
         )
 
-    # ================================
-    # Helper Functions
-    # ================================
+    # =====================================================
+    # Helpers
+    # =====================================================
+
+    def is_connected(self):
+
+        return self.connected
+
+    def capability_summary(self):
+
+        return {
+            "tools": len(self.tools),
+            "resources": len(self.resources),
+            "prompts": len(self.prompts),
+        }
+
+    def _ensure_connection(self):
+
+        if not self.connected or self.session is None:
+
+            raise RuntimeError(
+                "MCP Server is not connected."
+            )
+
+    # =====================================================
+    # Descriptions
+    # =====================================================
 
     def tool_descriptions(self):
 
-        text = ""
+        if not self.tools:
+
+            return "No tools available."
+
+        lines = []
 
         for tool in self.tools:
 
-            text += f"""
+            lines.append(
+                f"""
 Tool:
 {tool.name}
 
 Description:
 {tool.description}
-
 """
+            )
 
-        return text
+        return "\n".join(lines)
 
     def resource_descriptions(self):
 
-        text = ""
+        if not self.resources:
+
+            return "No resources available."
+
+        lines = []
 
         for resource in self.resources:
 
-            text += f"""
-Resource:
+            description = getattr(
+                resource,
+                "description",
+                "",
+            )
 
+            lines.append(
+                f"""
+Resource:
 {resource.uri}
 
+Description:
+{description}
 """
+            )
 
-        return text
+        return "\n".join(lines)
 
     def prompt_descriptions(self):
 
-        text = ""
+        if not self.prompts:
+
+            return "No prompts available."
+
+        lines = []
 
         for prompt in self.prompts:
 
-            text += f"""
-Prompt:
+            description = getattr(
+                prompt,
+                "description",
+                "",
+            )
 
+            lines.append(
+                f"""
+Prompt:
 {prompt.name}
 
+Description:
+{description}
 """
+            )
 
-        return text
+        return "\n".join(lines)
