@@ -1,11 +1,18 @@
+"""
+Application Entry Point
+Vellora Therapeutics AI Agent
+"""
+
 import asyncio
 
-from config import SERVER_PATH
 from agent import VelloraAgent
+from config import SERVER_PATH
 from ui import (
-    welcome,
+    assistant_output,
+    error,
+    success,
     user_input,
-    assistant_output
+    welcome,
 )
 
 
@@ -13,23 +20,57 @@ async def main():
 
     agent = VelloraAgent(SERVER_PATH)
 
-    await agent.initialize()
+    try:
+        # -------------------------------
+        # Initialize Agent
+        # -------------------------------
+        await agent.initialize()
 
-    welcome()
+        welcome()
 
-    while True:
+        success("Agent initialized successfully.\n")
 
-        message = user_input()
+        # -------------------------------
+        # Main Chat Loop
+        # -------------------------------
+        while True:
 
-        if message.lower() in ["exit", "quit"]:
+            try:
 
-            break
+                message = user_input().strip()
 
-        response = await agent.process_message(message)
+                if not message:
+                    continue
 
-        assistant_output(response)
+                if message.lower() in {
+                    "exit",
+                    "quit",
+                    "q",
+                }:
+                    break
 
-    await agent.shutdown()
+                response = await agent.process_message(message)
+
+                assistant_output(response)
+
+            except KeyboardInterrupt:
+                break
+
+            except Exception as e:
+                error(f"\nUnexpected Error:\n{e}\n")
+
+    except Exception as e:
+
+        error(f"\nFailed to start the application.\n{e}\n")
+
+    finally:
+
+        try:
+            await agent.shutdown()
+            success("Disconnected from MCP Server.")
+
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
