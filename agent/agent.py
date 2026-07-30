@@ -1,6 +1,16 @@
 """
 Main AI Agent
-Coordinates communication between Gemini and the MCP Server.
+
+Coordinates communication between:
+
+User
+↓
+
+Gemini
+
+↓
+
+MCP Server
 """
 
 from conversation import ConversationMemory
@@ -18,130 +28,188 @@ class VelloraAgent:
 
         self.mcp = MCPClient(server_path)
 
+    # =====================================================
+    # Initialization
+    # =====================================================
+
     async def initialize(self):
-        """
-        Initialize the agent.
-        """
 
         await self.mcp.connect()
 
         await self.mcp.discover_everything()
 
-        print("Vellora Agent initialized successfully.")
+        print("✅ Vellora Agent Ready")
 
     async def shutdown(self):
-        """
-        Shutdown the agent.
-        """
 
         await self.mcp.disconnect()
 
-    async def process_message(self, user_message: str):
+    # =====================================================
+    # Main Entry
+    # =====================================================
 
-        # Save user message
+    async def process_message(
+        self,
+        user_message: str,
+    ) -> str:
+
         self.memory.add_user(user_message)
 
-        # Ask Gemini to decide what to do
         decision = await self.gemini.decide_action(
+
             user_message=user_message,
+
             tools_description=self.mcp.tool_descriptions(),
+
             resources_description=self.mcp.resource_descriptions(),
+
             prompts_description=self.mcp.prompt_descriptions(),
+
         )
 
-        # -----------------------------
-        # Chat
-        # -----------------------------
+        try:
 
-        if decision.type == "chat":
+            if decision.type == "chat":
 
-            response = await self.gemini.chat(user_message)
+                return await self._handle_chat(
+                    user_message
+                )
 
-            self.memory.add_assistant(response)
+            elif decision.type == "tool":
 
-            return response
+                return await self._handle_tool(
+                    user_message,
+                    decision.name,
+                    decision.arguments,
+                )
 
-        # -----------------------------
-        # Tool
-        # -----------------------------
+            elif decision.type == "resource":
 
-        elif decision.type == "tool":
+                return await self._handle_resource(
+                    user_message,
+                    decision.name,
+                )
 
-            tool_result = await self.mcp.call_tool(
-                decision.name,
-                decision.arguments
-            )
+            elif decision.type == "prompt":
 
-            self.memory.add_tool(
-                decision.name,
-                tool_result
-            )
+                return await self._handle_prompt(
+                    decision.name,
+                    decision.arguments,
+                )
 
-            response = await self.gemini.chat(
-                f"""
-User Question:
+            else:
 
-{user_message}
+                return await self._handle_chat(
+                    user_message
+                )
 
-Tool Result:
+        except Exception as e:
 
-{tool_result}
+            return f"Error: {e}"
 
-Answer the user professionally.
-"""
-            )
+    # =====================================================
+    # Chat
+    # =====================================================
 
-            self.memory.add_assistant(response)
+    async def _handle_chat(
+        self,
+        message: str,
+    ) -> str:
 
-            return response
+        response = await self.gemini.chat(
+            message
+        )
 
-        # -----------------------------
-        # Resource
-        # -----------------------------
+        self.memory.add_assistant(response)
 
-        elif decision.type == "resource":
+        return response
 
-            resource = await self.mcp.read_resource(
-                decision.name
-            )
+    # =====================================================
+    # Tool
+    # =====================================================
 
-            response = await self.gemini.chat(
-                f"""
-User Question:
+    async def _handle_tool(
+        self,
+        user_question: str,
+        tool_name: str,
+        arguments: dict,
+    ) -> str:
 
-{user_message}
+        result = await self.mcp.call_tool(
+            tool_name,
+            arguments,
+        )
 
-Company Resource:
+        self.memory.add_tool(
+            tool_name,
+            result,
+        )
 
-{resource}
+        response = await self.gemini.format_tool_response(
 
-Answer the question.
-"""
-            )
+            user_question=user_question,
 
-            self.memory.add_assistant(response)
+            tool_name=tool_name,
 
-            return response
+            tool_result=result,
 
-        # -----------------------------
-        # Prompt
-        # -----------------------------
+        )
 
-        elif decision.type == "prompt":
+        self.memory.add_assistant(
+            response
+        )
 
-            prompt = await self.mcp.get_prompt(
-                decision.name,
-                decision.arguments
-            )
+        return response
 
-            response = await self.gemini.chat(str(prompt))
+    # =====================================================
+    # Resource
+    # =====================================================
 
-            self.memory.add_assistant(response)
+    async def _handle_resource(
+        self,
+        user_question: str,
+        resource_uri: str,
+    ) -> str:
 
-            return response
+        resource = await self.mcp.read_resource(
+            resource_uri
+        )
 
-        # -----------------------------
-        # Unknown
-        # -----------------------------
+        response = await self.gemini.format_resource_response(
 
-        return "Unable to determine the correct action."
+            user_question=user_question,
+
+            resource=resource,
+
+        )
+
+        self.memory.add_assistant(
+            response
+        )
+
+        return response
+
+    # =====================================================
+    # Prompt
+    # =====================================================
+
+    async def _handle_prompt(
+        self,
+        prompt_name: str,
+        arguments: dict,
+    ) -> str:
+
+        prompt = await self.mcp.get_prompt(
+            prompt_name,
+            arguments,
+        )
+
+        response = await self.gemini.format_prompt_response(
+            prompt
+        )
+
+        self.memory.add_assistant(
+            response
+        )
+
+        return response
