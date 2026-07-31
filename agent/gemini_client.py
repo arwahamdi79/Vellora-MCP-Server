@@ -9,7 +9,11 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from config import GEMINI_API_KEY, MODEL_NAME, SYSTEM_PROMPT
+from config import (
+    GEMINI_API_KEY,
+    MODEL_NAME,
+    SYSTEM_PROMPT,
+)
 
 
 # ==========================================================
@@ -25,9 +29,7 @@ class AgentDecision(BaseModel):
         description="chat | tool | resource | prompt"
     )
 
-    name: str = Field(
-        default=""
-    )
+    name: str = Field(default="")
 
     arguments: dict[str, Any] = Field(
         default_factory=dict
@@ -46,9 +48,49 @@ class GeminiClient:
             api_key=GEMINI_API_KEY
         )
 
-    # ------------------------------------------------------
-    # Private Generator
-    # ------------------------------------------------------
+    # ======================================================
+    # Helpers
+    # ======================================================
+
+    def _history_to_text(
+        self,
+        history: list | None,
+    ) -> str:
+
+        if not history:
+            return "No previous conversation."
+
+        lines = []
+
+        for message in history:
+
+            role = message.get(
+                "role",
+                "unknown"
+            )
+
+            if role == "tool":
+
+                lines.append(
+                    f"""
+Tool: {message.get('tool')}
+
+Result:
+{message.get('result')}
+"""
+                )
+
+            else:
+
+                lines.append(
+                    f"{role.capitalize()}: {message.get('text','')}"
+                )
+
+        return "\n".join(lines)
+
+    # ======================================================
+    # Low-Level Generator
+    # ======================================================
 
     def _generate(
         self,
@@ -77,66 +119,101 @@ class GeminiClient:
 
         return response
 
-    # ------------------------------------------------------
+    # ======================================================
     # Normal Chat
-    # ------------------------------------------------------
+    # ======================================================
 
     async def chat(
         self,
-        message: str
+        *,
+        message: str,
+        history: list | None = None,
     ) -> str:
 
+        conversation = self._history_to_text(
+            history
+        )
+
+        prompt = f"""
+Conversation History
+
+{conversation}
+
+Current User Message
+
+{message}
+
+Respond naturally.
+"""
+
         response = self._generate(
-            prompt=message,
+            prompt=prompt,
             system_prompt=SYSTEM_PROMPT,
         )
 
         return response.text
 
-    # ------------------------------------------------------
-    # Decide MCP Action
-    # ------------------------------------------------------
+    # ======================================================
+    # Decide Action
+    # ======================================================
 
     async def decide_action(
         self,
         *,
         user_message: str,
+        history: list | None,
         tools_description: str,
         resources_description: str,
         prompts_description: str,
     ) -> AgentDecision:
 
-        router_prompt = f"""
-You are the routing engine of the Vellora Therapeutics AI Agent.
+        conversation = self._history_to_text(
+            history
+        )
 
-Your ONLY responsibility is choosing ONE action.
+        router_prompt = f"""
+You are the routing engine of the Vellora AI Agent.
+
+Your ONLY responsibility is selecting ONE action.
+
+Conversation History
+
+{conversation}
 
 Available Tools
-================
+
 {tools_description}
 
 Available Resources
-===================
+
 {resources_description}
 
 Available Prompts
-=================
+
 {prompts_description}
 
-Decision Rules
+Rules
 
-1. Use "tool" if company database information is required.
+1. Use "tool" when company data is required.
 
-2. Use "resource" if the user asks about a policy, guideline,
-documentation or company knowledge.
+2. Use "resource" for company policies.
 
-3. Use "prompt" only when a predefined MCP prompt is appropriate.
+3. Use "prompt" for predefined prompt templates.
 
-4. Otherwise use "chat".
+4. Otherwise return "chat".
+
+Always use conversation history
+to resolve references like:
+
+"it"
+
+"that"
+
+"same medicine"
+
+"previous batch"
 
 Return ONLY valid JSON.
-
-Never explain your decision.
 """
 
         response = self._generate(
@@ -148,9 +225,9 @@ Never explain your decision.
 
         return response.parsed
 
-    # ------------------------------------------------------
-    # Generate Final Answer After Tool
-    # ------------------------------------------------------
+    # ======================================================
+    # Tool Formatting
+    # ======================================================
 
     async def format_tool_response(
         self,
@@ -158,9 +235,18 @@ Never explain your decision.
         user_question: str,
         tool_name: str,
         tool_result,
+        history: list | None = None,
     ) -> str:
 
+        conversation = self._history_to_text(
+            history
+        )
+
         prompt = f"""
+Conversation History
+
+{conversation}
+
 User Question
 
 {user_question}
@@ -173,14 +259,13 @@ Tool Result
 
 {tool_result}
 
-Write a natural professional response.
+Write a professional response.
 
-Rules
+Never mention:
 
-- Never mention JSON.
-- Never mention MCP.
-- Never mention internal implementation.
-- Explain the result clearly.
+- MCP
+- JSON
+- Internal tools
 """
 
         response = self._generate(
@@ -190,18 +275,27 @@ Rules
 
         return response.text
 
-    # ------------------------------------------------------
-    # Generate Final Answer After Resource
-    # ------------------------------------------------------
+    # ======================================================
+    # Resource Formatting
+    # ======================================================
 
     async def format_resource_response(
         self,
         *,
         user_question: str,
         resource,
+        history: list | None = None,
     ) -> str:
 
+        conversation = self._history_to_text(
+            history
+        )
+
         prompt = f"""
+Conversation History
+
+{conversation}
+
 User Question
 
 {user_question}
@@ -210,10 +304,7 @@ Company Resource
 
 {resource}
 
-Answer using only the provided resource.
-
-If the answer is not available,
-say that politely.
+Answer ONLY using the resource.
 """
 
         response = self._generate(
@@ -223,17 +314,32 @@ say that politely.
 
         return response.text
 
-    # ------------------------------------------------------
-    # Generate Final Answer After Prompt
-    # ------------------------------------------------------
+    # ======================================================
+    # Prompt Formatting
+    # ======================================================
 
     async def format_prompt_response(
         self,
         prompt_result,
+        history: list | None = None,
     ) -> str:
 
+        conversation = self._history_to_text(
+            history
+        )
+
+        prompt = f"""
+Conversation History
+
+{conversation}
+
+Generated Prompt
+
+{prompt_result}
+"""
+
         response = self._generate(
-            prompt=str(prompt_result),
+            prompt=prompt,
             system_prompt=SYSTEM_PROMPT,
         )
 
