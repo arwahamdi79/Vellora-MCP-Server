@@ -4,13 +4,12 @@ Main AI Agent
 Coordinates communication between:
 
 User
-↓
-
-Gemini
-
-↓
-
-MCP Server
+    │
+    ▼
+ Gemini
+    │
+    ▼
+ MCP Server
 """
 
 from conversation import ConversationMemory
@@ -55,57 +54,69 @@ class VelloraAgent:
 
         self.memory.add_user(user_message)
 
-        decision = await self.gemini.decide_action(
-
-            user_message=user_message,
-
-            tools_description=self.mcp.tool_descriptions(),
-
-            resources_description=self.mcp.resource_descriptions(),
-
-            prompts_description=self.mcp.prompt_descriptions(),
-
-        )
+        history = self.memory.last_messages(10)
 
         try:
 
-            if decision.type == "chat":
+            decision = await self.gemini.decide_action(
 
-                return await self._handle_chat(
+                user_message=user_message,
+
+                history=history,
+
+                tools_description=self.mcp.tool_descriptions(),
+
+                resources_description=self.mcp.resource_descriptions(),
+
+                prompts_description=self.mcp.prompt_descriptions(),
+
+            )
+
+            decision_type = decision.type.lower()
+
+            handlers = {
+
+                "chat":
+                    lambda: self._handle_chat(
+                        user_message
+                    ),
+
+                "tool":
+                    lambda: self._handle_tool(
+                        user_message,
+                        decision.name,
+                        decision.arguments,
+                    ),
+
+                "resource":
+                    lambda: self._handle_resource(
+                        user_message,
+                        decision.name,
+                    ),
+
+                "prompt":
+                    lambda: self._handle_prompt(
+                        decision.name,
+                        decision.arguments,
+                    ),
+
+            }
+
+            handler = handlers.get(
+
+                decision_type,
+
+                lambda: self._handle_chat(
                     user_message
-                )
+                ),
 
-            elif decision.type == "tool":
+            )
 
-                return await self._handle_tool(
-                    user_message,
-                    decision.name,
-                    decision.arguments,
-                )
-
-            elif decision.type == "resource":
-
-                return await self._handle_resource(
-                    user_message,
-                    decision.name,
-                )
-
-            elif decision.type == "prompt":
-
-                return await self._handle_prompt(
-                    decision.name,
-                    decision.arguments,
-                )
-
-            else:
-
-                return await self._handle_chat(
-                    user_message
-                )
+            return await handler()
 
         except Exception as e:
 
-            return f"Error: {e}"
+            return f"Unexpected Error: {e}"
 
     # =====================================================
     # Chat
@@ -117,7 +128,11 @@ class VelloraAgent:
     ) -> str:
 
         response = await self.gemini.chat(
-            message
+
+            message=message,
+
+            history=self.memory.last_messages(10),
+
         )
 
         self.memory.add_assistant(response)
@@ -135,14 +150,28 @@ class VelloraAgent:
         arguments: dict,
     ) -> str:
 
+        if not self.mcp.has_tool(tool_name):
+
+            return (
+                f"The requested tool "
+                f"'{tool_name}' "
+                f"is not available."
+            )
+
         result = await self.mcp.call_tool(
+
             tool_name,
+
             arguments,
+
         )
 
         self.memory.add_tool(
+
             tool_name,
+
             result,
+
         )
 
         response = await self.gemini.format_tool_response(
@@ -153,11 +182,11 @@ class VelloraAgent:
 
             tool_result=result,
 
+            history=self.memory.last_messages(10),
+
         )
 
-        self.memory.add_assistant(
-            response
-        )
+        self.memory.add_assistant(response)
 
         return response
 
@@ -172,7 +201,9 @@ class VelloraAgent:
     ) -> str:
 
         resource = await self.mcp.read_resource(
+
             resource_uri
+
         )
 
         response = await self.gemini.format_resource_response(
@@ -181,11 +212,11 @@ class VelloraAgent:
 
             resource=resource,
 
+            history=self.memory.last_messages(10),
+
         )
 
-        self.memory.add_assistant(
-            response
-        )
+        self.memory.add_assistant(response)
 
         return response
 
@@ -200,16 +231,21 @@ class VelloraAgent:
     ) -> str:
 
         prompt = await self.mcp.get_prompt(
+
             prompt_name,
+
             arguments,
+
         )
 
         response = await self.gemini.format_prompt_response(
-            prompt
+
+            prompt,
+
+            history=self.memory.last_messages(10),
+
         )
 
-        self.memory.add_assistant(
-            response
-        )
+        self.memory.add_assistant(response)
 
         return response
