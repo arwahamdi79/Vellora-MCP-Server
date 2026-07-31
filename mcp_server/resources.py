@@ -1,36 +1,33 @@
-GET_BATCH_DETAILS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "batch_id": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Unique identifier of the manufacturing batch."
-        }
-    },
-    "required": ["batch_id"],
-    "additionalProperties": False
-}
+from pathlib import Path
 
-INITIATE_RECALL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "batch_id": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Unique identifier of the manufacturing batch to recall."
-        },
-        "recall_reason": {
-            "type": "string",
-            "minLength": 10,
-            "maxLength": 500,
-            "description": "Detailed justification for the product recall."
-        },
-        "authorized_manager_id": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Employee ID of the authorizing QA/Operations Manager."
-        }
-    },
-    "required": ["batch_id"],
-    "additionalProperties": False
-}
+POLICY_DIR = Path(__file__).resolve().parent.parent / "docs" / "policies"
+
+
+def read_policy(filename):
+    """Read a policy document from the policies folder."""
+    with open(POLICY_DIR / filename, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# =====================================================
+# Policy Resources
+# =====================================================
+
+def get_batch_approval_policy():
+    """Return the Batch Approval Policy."""
+    return read_policy("batch_approval_policy.md")
+
+
+def get_manufacturing_sop():
+    """Return the Manufacturing Standard Operating Procedure."""
+    return read_policy("manufacturing_sop.md")
+
+
+def get_product_recall_policy():
+    """Return the Product Recall Policy."""
+    return read_policy("product_recall_policy.md")
+
+
+def get_storage_guidelines():
+    """Return the Storage Guidelines."""
+    return read_policy("storage_guidelines.md")

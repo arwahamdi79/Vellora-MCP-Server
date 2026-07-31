@@ -34,3 +34,12 @@ mcp_server/
 7.​Progress Tracking (run_batch_safety_audit): Reports granular progress during long-running tasks using ctx.report_progress().
 
 8.​Embedded Database Design (SQLite): Utilizes vellora_therapeutics.db for zero-dependency local stdio execution and seamless testing.
+
+##  Transport Architecture & Justification
+* **Current Implementation:** `stdio` (Standard I/O) transport used during development and local evaluation for fast, zero-dependency testing.
+* **Production Deployment Plan:** For multi-facility pharmaceutical operations (Vellora Therapeutics), the server is architected to transition to **Streamable HTTP (SSE)** with TLS encryption and JWT authentication to support remote multi-site access across manufacturing facilities.
+
+##  Client Fallback & Sampling Behavior
+* **Sampling (`sampling/createMessage`):** Utilized in `analyze_batch_discrepancy_with_sampling` to delegate complex reasoning to the host model safely.
+* **Client Capability Fallback:** If a client connects without `elicitation` capabilities, high-risk tools like `initiate_product_recall` immediately degrade to read-only status and block state mutation to prevent unmonitored changes.
+*
