@@ -12,6 +12,7 @@ Responsibilities
 - Retrieve Prompts
 """
 
+import asyncio
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession
@@ -119,11 +120,15 @@ class MCPClient:
 
     async def discover_everything(self):
 
-        await self.discover_tools()
+        await asyncio.gather(
 
-        await self.discover_resources()
+            self.discover_tools(),
 
-        await self.discover_prompts()
+            self.discover_resources(),
+
+            self.discover_prompts(),
+
+        )
 
         print()
 
@@ -151,6 +156,12 @@ class MCPClient:
 
         self._ensure_connection()
 
+        if not self.has_tool(tool_name):
+
+            raise ValueError(
+                f"Unknown tool '{tool_name}'."
+            )
+
         return await self.session.call_tool(
             tool_name,
             arguments,
@@ -167,7 +178,15 @@ class MCPClient:
 
         self._ensure_connection()
 
-        return await self.session.read_resource(uri)
+        if not self.has_resource(uri):
+
+            raise ValueError(
+                f"Unknown resource '{uri}'."
+            )
+
+        return await self.session.read_resource(
+            uri
+        )
 
     # =====================================================
     # Prompts
@@ -180,6 +199,12 @@ class MCPClient:
     ):
 
         self._ensure_connection()
+
+        if not self.has_prompt(name):
+
+            raise ValueError(
+                f"Unknown prompt '{name}'."
+            )
 
         return await self.session.get_prompt(
             name=name,
@@ -194,12 +219,46 @@ class MCPClient:
 
         return self.connected
 
+    def has_tool(
+        self,
+        tool_name: str,
+    ) -> bool:
+
+        return any(
+            tool.name == tool_name
+            for tool in self.tools
+        )
+
+    def has_resource(
+        self,
+        uri: str,
+    ) -> bool:
+
+        return any(
+            resource.uri == uri
+            for resource in self.resources
+        )
+
+    def has_prompt(
+        self,
+        name: str,
+    ) -> bool:
+
+        return any(
+            prompt.name == name
+            for prompt in self.prompts
+        )
+
     def capability_summary(self):
 
         return {
+
             "tools": len(self.tools),
+
             "resources": len(self.resources),
+
             "prompts": len(self.prompts),
+
         }
 
     def _ensure_connection(self):
@@ -224,13 +283,19 @@ class MCPClient:
 
         for tool in self.tools:
 
+            description = getattr(
+                tool,
+                "description",
+                "",
+            )
+
             lines.append(
                 f"""
 Tool:
 {tool.name}
 
 Description:
-{tool.description}
+{description}
 """
             )
 
