@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .server import mcp
+from .instance import mcp
 
 from .authorization import authorize
 

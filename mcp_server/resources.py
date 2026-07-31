@@ -1,8 +1,5 @@
 from pathlib import Path
-
-from .server import mcp
-
-
+from .instance import mcp
 POLICY_DIR = (
     Path(__file__).resolve()
     .parent.parent

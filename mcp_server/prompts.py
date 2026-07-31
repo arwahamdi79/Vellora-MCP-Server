@@ -1,8 +1,9 @@
-from .server import mcp
+from .instance import mcp
 
 
 @mcp.prompt()
-def batch_analysis_prompt(batch_id: int):
+def batch_analysis_prompt(batch_id:int):
+    
     """
     Analyze a manufacturing batch quality status.
     """
