@@ -1,7 +1,8 @@
 from pathlib import Path
 import sqlite3
 
-DB_PATH = Path(__file__).resolve().parent.parent / "db" / "vellora.db"
+
+DB_PATH = Path(__file__).resolve().parent.parent / "db" / "vellora_therapeutics.db"
 
 
 def get_connection():
@@ -15,33 +16,26 @@ def get_connection():
 # =====================================================
 
 def get_all_medicines():
-    conn = get_connection()
-
-    cursor = conn.execute("""
-        SELECT *
-        FROM Medicine
-        ORDER BY MedicineName
-    """)
-
-    medicines = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-
-    return medicines
+    with get_connection() as conn:
+        cursor = conn.execute("""
+            SELECT *
+            FROM Medicine
+            ORDER BY MedicineName
+        """)
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def get_medicine_by_id(medicine_id):
-    conn = get_connection()
+    with get_connection() as conn:
+        cursor = conn.execute("""
+            SELECT *
+            FROM Medicine
+            WHERE MedicineID = ?
+        """, (medicine_id,))
 
-    cursor = conn.execute("""
-        SELECT *
-        FROM Medicine
-        WHERE MedicineID = ?
-    """, (medicine_id,))
+        row = cursor.fetchone()
 
-    row = cursor.fetchone()
-    conn.close()
-
-    return dict(row) if row else None
+        return dict(row) if row else None
 
 
 # =====================================================
@@ -54,34 +48,33 @@ def create_production_order(
     planned_quantity,
     responsible_employee_id
 ):
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        INSERT INTO Production_Order
+    with get_connection() as conn:
+
+        cursor = conn.execute("""
+            INSERT INTO Production_Order
+            (
+                MedicineID,
+                SupplierID,
+                PlannedQuantity,
+                ResponsibleEmployeeID
+            )
+            VALUES (?, ?, ?, ?)
+        """,
         (
-            MedicineID,
-            SupplierID,
-            PlannedQuantity,
-            ResponsibleEmployeeID
-        )
-        VALUES (?, ?, ?, ?)
-    """, (
-        medicine_id,
-        supplier_id,
-        planned_quantity,
-        responsible_employee_id
-    ))
+            medicine_id,
+            supplier_id,
+            planned_quantity,
+            responsible_employee_id
+        ))
 
-    conn.commit()
+        conn.commit()
 
-    order_id = cursor.lastrowid
+        return {
+            "ProductionOrderID": cursor.lastrowid,
+            "message": "Production order created successfully."
+        }
 
-    conn.close()
-
-    return {
-        "ProductionOrderID": order_id,
-        "message": "Production order created successfully."
-    }
 
 
 # =====================================================
@@ -89,38 +82,43 @@ def create_production_order(
 # =====================================================
 
 def list_batches():
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        SELECT *
-        FROM Manufacturing_Batch
-        ORDER BY BatchID DESC
-    """)
+    with get_connection() as conn:
 
-    batches = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+        cursor = conn.execute("""
+            SELECT *
+            FROM Manufacturing_Batch
+            ORDER BY BatchID DESC
+        """)
 
-    return batches
+        return [
+            dict(row)
+            for row in cursor.fetchall()
+        ]
+
 
 
 def update_batch_status(batch_id, new_status):
-    conn = get_connection()
 
-    conn.execute("""
-        UPDATE Manufacturing_Batch
-        SET BatchStatus = ?
-        WHERE BatchID = ?
-    """, (
-        new_status,
-        batch_id
-    ))
+    with get_connection() as conn:
 
-    conn.commit()
-    conn.close()
+        conn.execute("""
+            UPDATE Manufacturing_Batch
+            SET BatchStatus = ?
+            WHERE BatchID = ?
+        """,
+        (
+            new_status,
+            batch_id
+        ))
+
+        conn.commit()
+
 
     return {
         "message": "Batch status updated successfully."
     }
+
 
 
 # =====================================================
@@ -134,55 +132,57 @@ def record_quality_test(
     qa_employee_id,
     remarks
 ):
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        INSERT INTO Quality_Test
+    with get_connection() as conn:
+
+        cursor = conn.execute("""
+            INSERT INTO Quality_Test
+            (
+                BatchID,
+                TestType,
+                TestResult,
+                QAEmployeeID,
+                Remarks
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """,
         (
-            BatchID,
-            TestType,
-            TestResult,
-            QAEmployeeID,
-            Remarks
-        )
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        batch_id,
-        test_type,
-        test_result,
-        qa_employee_id,
-        remarks
-    ))
+            batch_id,
+            test_type,
+            test_result,
+            qa_employee_id,
+            remarks
+        ))
 
-    conn.commit()
+        conn.commit()
 
-    test_id = cursor.lastrowid
 
-    conn.close()
+        return {
+            "TestID": cursor.lastrowid,
+            "message": "Quality test recorded successfully."
+        }
 
-    return {
-        "TestID": test_id,
-        "message": "Quality test recorded successfully."
-    }
 
 
 def list_quality_tests():
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        SELECT *
-        FROM Quality_Test
-        ORDER BY TestDate DESC
-    """)
+    with get_connection() as conn:
 
-    tests = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+        cursor = conn.execute("""
+            SELECT *
+            FROM Quality_Test
+            ORDER BY TestDate DESC
+        """)
 
-    return tests
+        return [
+            dict(row)
+            for row in cursor.fetchall()
+        ]
+
 
 
 # =====================================================
-# Product Recalls
+# Product Recall
 # =====================================================
 
 def create_product_recall(
@@ -190,47 +190,49 @@ def create_product_recall(
     recall_reason,
     authorized_manager_id
 ):
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        INSERT INTO Product_Recall
+    with get_connection() as conn:
+
+        cursor = conn.execute("""
+            INSERT INTO Product_Recall
+            (
+                BatchID,
+                RecallReason,
+                AuthorizedManagerID
+            )
+            VALUES (?, ?, ?)
+        """,
         (
-            BatchID,
-            RecallReason,
-            AuthorizedManagerID
-        )
-        VALUES (?, ?, ?)
-    """, (
-        batch_id,
-        recall_reason,
-        authorized_manager_id
-    ))
+            batch_id,
+            recall_reason,
+            authorized_manager_id
+        ))
 
-    conn.commit()
+        conn.commit()
 
-    recall_id = cursor.lastrowid
 
-    conn.close()
+        return {
+            "RecallID": cursor.lastrowid,
+            "message": "Recall created successfully."
+        }
 
-    return {
-        "RecallID": recall_id,
-        "message": "Recall created successfully."
-    }
 
 
 def list_recalls():
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        SELECT *
-        FROM Product_Recall
-        ORDER BY RecallDate DESC
-    """)
+    with get_connection() as conn:
 
-    recalls = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+        cursor = conn.execute("""
+            SELECT *
+            FROM Product_Recall
+            ORDER BY RecallDate DESC
+        """)
 
-    return recalls
+        return [
+            dict(row)
+            for row in cursor.fetchall()
+        ]
+
 
 
 # =====================================================
@@ -238,16 +240,16 @@ def list_recalls():
 # =====================================================
 
 def get_employee(employee_id):
-    conn = get_connection()
 
-    cursor = conn.execute("""
-        SELECT *
-        FROM Employee
-        WHERE EmployeeID = ?
-    """, (employee_id,))
+    with get_connection() as conn:
 
-    row = cursor.fetchone()
+        cursor = conn.execute("""
+            SELECT *
+            FROM Employee
+            WHERE EmployeeID = ?
+        """,
+        (employee_id,))
 
-    conn.close()
+        row = cursor.fetchone()
 
-    return dict(row) if row else None
+        return dict(row) if row else None
