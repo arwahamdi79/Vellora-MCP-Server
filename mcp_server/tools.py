@@ -1,4 +1,6 @@
+from .app import mcp
 from pathlib import Path
+from typing import Optional
 from .elicitation import input_required
 from .notifications import (
     production_order_created,
@@ -11,7 +13,7 @@ from .validation import (
     validate_positive_integer,
     validate_choice,
 )
-from mcp.server.fastmcp import FastMCP
+
 
 from .Authorization import authorize
 
@@ -29,8 +31,9 @@ from .database import (
     list_recalls,
     get_employee,
 )
+print("Loading tools.py")
 DB_PATH = Path(__file__).parent.parent / "db" / "vellora.db"
-mcp = FastMCP("Vellora MCP")
+
 
 
 # --------------------------------------------------
@@ -55,7 +58,7 @@ def get_medicine(employee_id: int, medicine_id: int):
 # --------------------------------------------------
 # Production
 # --------------------------------------------------
-from typing import Optional
+
 
 @mcp.tool()
 def create_order(
@@ -180,7 +183,7 @@ def change_batch_status(
 # --------------------------------------------------
 # Quality
 # --------------------------------------------------
-from typing import Optional
+
 
 @mcp.tool()
 def add_quality_test(
@@ -261,9 +264,7 @@ def get_quality_tests(employee_id: int):
 # Recalls
 # --------------------------------------------------
 
-from typing import Optional
 
-from typing import Optional
 
 @mcp.tool()
 def create_recall(
