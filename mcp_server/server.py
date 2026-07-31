@@ -1,26 +1,41 @@
 from fastmcp import FastMCP
-from .elicitation import input_required
-from .validation import (
-    validate_positive_integer,
-    validate_choice,
-    validate_exists,
-)
-from .validation import (
-    validate_exists,
-    validate_positive_integer,
-    validate_choice,
-)
+
 from .capabilities import SERVER_DESCRIPTION
+
+
+# Single MCP server instance
+# All tools/resources/prompts attach here
 
 mcp = FastMCP(
     name="Vellora Therapeutics MCP Server",
-    instructions=SERVER_DESCRIPTION,
+    instructions=SERVER_DESCRIPTION
 )
 
+
+
+# Import registrations
+# These imports must come AFTER mcp creation
+
+from . import tools
+from . import resources
+from . import prompts
+
+
+
 @mcp.tool()
-def hello(name: str) -> str:
-    """Simple test tool"""
-    return f"Hello {name}"
+def health_check():
+
+    """
+    Check if MCP server is running.
+    """
+
+    return {
+        "status": "running",
+        "server": "Vellora Therapeutics MCP Server"
+    }
+
+
 
 if __name__ == "__main__":
+
     mcp.run()

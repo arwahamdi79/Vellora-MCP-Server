@@ -1,33 +1,87 @@
 from pathlib import Path
 
-POLICY_DIR = Path(__file__).resolve().parent.parent / "docs" / "policies"
+from .server import mcp
 
 
-def read_policy(filename):
-    """Read a policy document from the policies folder."""
-    with open(POLICY_DIR / filename, "r", encoding="utf-8") as f:
-        return f.read()
+POLICY_DIR = (
+    Path(__file__).resolve()
+    .parent.parent
+    / "docs"
+    / "policies"
+)
 
 
-# =====================================================
-# Policy Resources
-# =====================================================
+def read_policy(filename: str):
 
-def get_batch_approval_policy():
-    """Return the Batch Approval Policy."""
-    return read_policy("batch_approval_policy.md")
+    path = POLICY_DIR / filename
 
+    if not path.exists():
+        return "Policy document not found."
 
-def get_manufacturing_sop():
-    """Return the Manufacturing Standard Operating Procedure."""
-    return read_policy("manufacturing_sop.md")
+    with open(
+        path,
+        "r",
+        encoding="utf-8"
+    ) as file:
 
-
-def get_product_recall_policy():
-    """Return the Product Recall Policy."""
-    return read_policy("product_recall_policy.md")
+        return file.read()
 
 
-def get_storage_guidelines():
-    """Return the Storage Guidelines."""
-    return read_policy("storage_guidelines.md")
+
+@mcp.resource(
+    "vellora://policies/batch-approval"
+)
+def batch_approval_policy():
+
+    """
+    Manufacturing batch approval policy.
+    """
+
+    return read_policy(
+        "batch_approval_policy.md"
+    )
+
+
+
+@mcp.resource(
+    "vellora://policies/manufacturing-sop"
+)
+def manufacturing_sop():
+
+    """
+    Standard manufacturing operating procedure.
+    """
+
+    return read_policy(
+        "manufacturing_sop.md"
+    )
+
+
+
+@mcp.resource(
+    "vellora://policies/product-recall"
+)
+def product_recall_policy():
+
+    """
+    Product recall policy.
+    """
+
+    return read_policy(
+        "product_recall_policy.md"
+    )
+
+
+
+@mcp.resource(
+    "vellora://policies/storage-guidelines"
+)
+def storage_guidelines():
+
+    """
+    Medicine storage guidelines.
+    """
+
+    return read_policy(
+        "storage_guidelines.md"
+    )
