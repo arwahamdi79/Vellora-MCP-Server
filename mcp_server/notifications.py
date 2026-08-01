@@ -1,139 +1,74 @@
 from datetime import datetime
 
 
-
-def create_notification(
-    event_type,
-    message,
-    severity="info"
-):
-
-    return {
-
-        "event":
-        event_type,
-
-
-        "message":
-        message,
-
-
-        "severity":
-        severity,
-
-
-        "timestamp":
-        datetime.now().isoformat(
-            timespec="seconds"
-        )
-
-    }
-
-
-
-def tools_list_changed(reason):
-
+def create_notification(event_type: str, message: str, severity: str = "info"):
     """
-    MCP notification:
-    notifications/tools/list_changed
+    Create a notification object.
     """
 
     return {
-
-        "method":
-        "notifications/tools/list_changed",
-
-
-        "params":
-
-        {
-
-            "reason":
-            reason,
-
-
-            "timestamp":
-            datetime.now().isoformat(
-                timespec="seconds"
-            )
-
-        }
-
+        "event": event_type,
+        "message": message,
+        "severity": severity,
+        "timestamp": datetime.now().isoformat(timespec="seconds")
     }
 
 
+# --------------------------------------------------
+# Production
+# --------------------------------------------------
 
-def production_order_created(order_id):
-
+def production_order_created(order_id: int):
     return create_notification(
-
         "production_order_created",
-
-        f"Production order #{order_id} created."
-
+        f"Production Order #{order_id} has been created."
     )
 
 
+# --------------------------------------------------
+# Batch
+# --------------------------------------------------
 
-def batch_status_changed(
-    batch_id,
-    status
-):
+def batch_status_changed(batch_id: int, status: str):
 
-    severity = (
-        "warning"
-        if status == "Rejected"
-        else "info"
-    )
+    severity = "info"
 
+    if status == "Rejected":
+        severity = "warning"
 
     return create_notification(
-
         "batch_status_changed",
-
-        f"Batch {batch_id} changed to {status}",
-
+        f"Batch {batch_id} status changed to '{status}'.",
         severity
-
     )
 
 
+# --------------------------------------------------
+# Quality
+# --------------------------------------------------
 
-def quality_test_recorded(
-    batch_id,
-    result
-):
+def quality_test_recorded(batch_id: int, result: str):
 
-    severity = (
-        "warning"
-        if result == "Fail"
-        else "info"
-    )
+    severity = "info"
 
+    if result == "Fail":
+        severity = "warning"
 
     return create_notification(
-
         "quality_test_recorded",
-
-        f"Quality test for batch {batch_id}: {result}",
-
+        f"Quality test for Batch {batch_id}: {result}.",
         severity
-
     )
 
 
+# --------------------------------------------------
+# Recall
+# --------------------------------------------------
 
-def recall_created(
-    recall_id,
-    batch_id
-):
+def recall_created(recall_id: int, batch_id: int):
 
     return create_notification(
-
         "product_recall",
-
-        f"Recall #{recall_id} created for batch {batch_id}",
-
+        f"Product Recall #{recall_id} initiated for Batch {batch_id}.",
         "critical"
-
     )

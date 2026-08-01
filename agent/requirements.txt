@@ -1,5 +1,0 @@
-mcp
-google-genai
-python-dotenv
-rich
-pydantic

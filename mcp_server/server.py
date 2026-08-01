@@ -1,24 +1,10 @@
-from .instance import mcp
+from .app import mcp
 
-
-from . import tools
-from . import resources
-from . import prompts
-
-
-@mcp.tool()
-def health_check():
-
-    """
-    Check MCP server status.
-    """
-
-    return {
-        "status": "running",
-        "server": "Vellora Therapeutics MCP Server"
-    }
+import mcp_server.tools
+import mcp_server.resources
+import mcp_server.prompts
+import mcp_server.rag_tools
 
 
 if __name__ == "__main__":
-
     mcp.run()
