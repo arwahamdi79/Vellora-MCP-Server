@@ -1,0 +1,52 @@
+[
+    {
+        "id": 1,
+        "question": "What is the company leave policy?",
+        "expected_source": "employee_handbook.pdf"
+    },
+    {
+        "id": 2,
+        "question": "How can employees reset their password?",
+        "expected_source": "it_policy.pdf"
+    },
+    {
+        "id": 3,
+        "question": "What is the refund policy?",
+        "expected_source": "company_policy.pdf"
+    },
+    {
+        "id": 4,
+        "question": "Who should be contacted for HR issues?",
+        "expected_source": "employee_handbook.pdf"
+    },
+    {
+        "id": 5,
+        "question": "How many vacation days are allowed?",
+        "expected_source": "employee_handbook.pdf"
+    },
+    {
+        "id": 6,
+        "question": "What are the company working hours?",
+        "expected_source": "company_policy.pdf"
+    },
+    {
+        "id": 7,
+        "question": "Can employees work remotely?",
+        "expected_source": "remote_policy.pdf"
+    },
+    {
+        "id": 8,
+        "question": "What documents are required for onboarding?",
+        "expected_source": "hr_policy.pdf"
+    },
+    {
+        "id": 9,
+        "question": "How do I submit an expense report?",
+        "expected_source": "finance_policy.pdf"
+    },
+    {
+        "id": 10,
+        "question": "What is the company's code of conduct?",
+        "expected_source": "company_policy.pdf"
+    }
+]
