@@ -3,9 +3,6 @@ Vellora Therapeutics — Interactive MCP Client
 ===============================================
 Connects to the Vellora MCP server over stdio, discovers its tools and
 resources, and drives them through a simple numbered menu.
-
-Run with:
-    python3 client.py
 """
 
 import asyncio
