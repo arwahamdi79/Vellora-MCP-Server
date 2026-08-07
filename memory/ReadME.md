@@ -17,7 +17,7 @@ into the Vellora MCP agent.
 | Context comparison table | ✅ | `context_eval/README.md` |
 | Memory + RAG integration | ✅ | `agent/agent.py` (`VelloraAgent`), `agent/memory_adapter.py`, `agent/rag_adapter.py` |
 | Update README | ✅ | this file, plus `agent/README.md` and `context_eval/README.md` |
-| Prepare demo | ✅ | `python -m agent.demo` — memory is real (`MemoryManager`), RAG is mocked (`MockPolicyRAG`) since this dev environment has no network path to HuggingFace or an LLM; see [Known gaps](#known-gaps) |
+| Prepare demo | ✅ | `python -m agent.demo` — memory is real (`MemoryManager`), RAG is mocked (`MockPolicyRAG`) since this dev environment has no network path to HuggingFace or an LLM
 
 ## Layout
 
