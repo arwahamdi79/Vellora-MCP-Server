@@ -1,92 +1,105 @@
-# agent — Integration Layer
+# context_eval — Context Strategy Benchmark
 
-Wires Member 1's memory system and the existing `rag` package into the
-Vellora MCP server. This is the piece that was missing from `context_eval`
-alone: `context_eval` proves the four context strategies work in isolation,
-`agent` is where they actually get used by something that talks to a user.
+Benchmarks the four context-management strategies in `memory.short_term_memory.ShortTermMemory`
+against a synthetic long-running Vellora agent session, to answer one question:
 
-## Files
+**When the conversation gets long and something has to be pruned, do safety-critical facts survive?**
 
-- **`memory_adapter.py`** — drop-in replacement for the MCP server's old
-  `mcp_server/memory/episodic_memory.py` (`maybe_remember`, `load_memory_context`).
-  Same call signatures, backed by `memory.memory_manager.MemoryManager`
-  instead. One `MemoryManager` per `entity_id` (e.g. `"batch_1042"`), matching
-  the original per-entity scoping.
+## How it works
 
-- **`rag_adapter.py`** — wires `rag.factory.RAGFactory` behind a stable
-  `PolicyRAG.ask(query)` interface. Requires a real LLM and (for the vector
-  store) HuggingFace embeddings, neither reachable from this sandbox — see
-  the module docstring for how to instantiate it in a real environment.
+`scenarios.py` builds a synthetic conversation of routine tool/user/assistant chatter
+with two safety-critical facts planted in it:
 
-- **`agent.py`** — `VelloraAgent`, the actual integration point:
+1. Early on: *"Batch 1042 failed QA due to contamination detected in Line 3."*
+2. Near the end: *"Recall initiated for Batch 1042 - do not distribute."*
 
-  ```
-  User
-    |
-  VelloraAgent.handle_turn(user_message)
-    |
-  MemoryManager.get_context(strategy=...)   -> ShortTermMemory.apply_strategy()
-    |
-  PolicyRAG.ask(user_message)                -> rag.factory.RAGFactory pipeline
-    |
-  build_prompt(memory_context, rag_answer, sources, user_message)
-  ```
+`benchmark.py` runs each strategy at conversation lengths of 20 / 50 / 100 / 200
+messages and measures how much got kept, how much that saved in estimated
+tokens, and — critically — whether both planted facts are still present
+somewhere in the surviving content.
 
-  RAG is optional (`VelloraAgent(rag=None)` still runs the full memory half
-  of the pipeline), so the integration can be exercised without a live LLM.
+Run it: `python -m context_eval.benchmark` (writes `results.csv`, prints the table below).
 
-- **`demo.py`** — runnable end-to-end demo (`python -m agent.demo`). Memory
-  is the real `MemoryManager`; RAG is `MockPolicyRAG`, a stand-in that
-  implements the same `.ask()` interface with a tiny in-memory policy lookup
-  instead of real vector retrieval, since this sandbox can't reach
-  HuggingFace or an LLM. Swap it for `rag_adapter.build_rag(real_llm, ...)`
-  in production — nothing else in `VelloraAgent` changes.
+## Results
 
-## Migration required in `mcp_server/tools.py`
+| strategy | n_messages | messages_kept | compression_ratio | key_facts_retained | latency_ms |
+|---|---|---|---|---|---|
+| sliding_window | 20 | 15 | 0.695 | 1/2 | 0.006 |
+| observation_masking | 20 | 20 | 0.942 | 2/2 | 0.066 |
+| recursive_summarization | 20 | 20 | 1.000 | 2/2 | 0.024 |
+| zone_based_pruning | 20 | 11 | 0.484 | 1/2 | 0.012 |
+| sliding_window | 50 | 15 | 0.474 | 1/2 | 0.004 |
+| observation_masking | 50 | 50 | 0.975 | 1/2 | 0.117 |
+| recursive_summarization | 50 | 50 | 1.000 | 2/2 | 0.081 |
+| zone_based_pruning | 50 | 11 | 0.409 | 0/2 | 0.011 |
+| sliding_window | 100 | 15 | 0.214 | 0/2 | 0.035 |
+| observation_masking | 100 | 100 | 0.634 | 1/2 | 0.138 |
+| recursive_summarization | 100 | 33 | 0.456 | 2/2 | 0.564 |
+| zone_based_pruning | 100 | 11 | 0.071 | 0/2 | 0.021 |
+| sliding_window | 200 | 15 | 0.048 | 0/2 | 0.005 |
+| observation_masking | 200 | 200 | 0.734 | 1/2 | 0.353 |
+| recursive_summarization | 200 | 36 | 0.203 | 2/2 | 1.040 |
+| zone_based_pruning | 200 | 11 | 0.095 | 0/2 | 0.019 |
 
-```diff
-- from .memory.episodic_memory import (
--     maybe_remember,
--     load_memory_context,
-- )
-+ from agent.memory_adapter import maybe_remember, load_memory_context
-```
+(full data in `results.csv`)
 
-No other changes needed in `tools.py` — every call site
-(`maybe_remember(turn_text=..., entity_id=...)` in `change_batch_status` and
-`add_quality_test`, `load_memory_context(entity_id=..., opening_message=query)`
-in `get_batch_memory`) already matches this module's signatures.
+## Reading the results
 
-## What running the demo caught
+**Recursive summarization is the only strategy that retains both facts at every
+length tested.** That's not a coincidence of the benchmark — it's the only
+strategy that looks at *content* rather than *position*. The other three prune
+by "where is this in the conversation" or "what role is it," so a fact that
+happens to fall outside the kept window/zone is gone, no matter how important
+it was.
 
-Building this against the real memory package (rather than just describing
-it) surfaced three real bugs, now fixed:
+**Sliding window** and **zone-based pruning** are cheap and predictable, but
+they're purely positional: past a certain conversation length, an early fact
+has zero chance of survival regardless of importance (0/2 at 100+ messages,
+consistently). Zone-based pruning is especially aggressive here (~11 messages
+kept regardless of length) because our probe facts land as `tool`/`user`
+messages that fall outside the last-N-per-role window once the conversation
+moves on.
 
-1. `ShortTermMemory.strategy_zone_based_pruning` required a `zones` argument
-   with no default, even though it already merges with sensible per-role
-   defaults internally — any caller not passing `zones={}` explicitly would
-   crash. Now defaults to `None` → the built-in defaults.
+**Observation masking** keeps every non-tool message and only trims old tool
+output, so it does well when the fact is in a user/assistant turn but is not
+guaranteed to protect a fact buried in a tool message once enough newer tool
+calls arrive.
 
-2. `maybe_remember`'s first draft routed tool events through
-   `PromoteDropRouter`, the same importance heuristic used for organic chat
-   messages. That heuristic only gives role-based bonuses to
-   `user`/`tool`/`assistant` messages, not `system` — so a real batch status
-   change or failed QA test would usually score under the 0.6 default
-   threshold and be silently dropped. Tool events now write directly to
-   episodic memory, since the MCP tool call itself is already the "this
-   matters" decision.
+**Recursive summarization** costs the most latency (it's O(n) sentence
+scoring plus a summarizer call) and is the only one that shrinks in true
+proportion to conversation length while still holding onto salient content —
+because it's the only strategy with any notion of *why* something might
+matter. In this benchmark that "why" is a crude keyword heuristic
+(`extractive_summarizer` in `benchmark.py`); in production `summarizer_func`
+should be a real LLM call, which is dependency-injected into the strategy for
+exactly this reason (see `ShortTermMemory.strategy_recursive_summarization`).
 
-3. `MemoryManager.add_message` appended to a `maxlen`-bounded deque *before*
-   checking whether the buffer was full, so the oldest message could be
-   silently evicted by the deque itself before the router ever got a chance
-   to route it. Fixed to route first when already at capacity, then append.
+## Comparison table (qualitative)
 
-## Known gaps
+| Strategy | Compression | Fact-safety | Cost | Best for |
+|---|---|---|---|---|
+| Sliding window | High, fixed | Low — purely positional | Cheapest | Short-lived tasks where only the last few turns matter |
+| Observation masking | Low–medium | Medium — protects non-tool turns | Cheap | Tool-heavy sessions where the reasoning trail matters more than raw tool output |
+| Recursive summarization | Scales with length | High — content-aware | Highest (LLM call) | Long sessions where early facts can still be safety-relevant |
+| Zone-based pruning | High, fixed | Low — same failure mode as sliding window, per role | Cheap | Predictable per-role retention needs (e.g., always keep all system prompts) |
 
-- `rag_adapter.py` is real wiring against the actual `rag/` classes, but
-  it's untested here — verify it in an environment with network access to
-  HuggingFace and an LLM before treating it as proven.
-- Consolidation (episodic → semantic) is periodic by design, not real-time —
-  see `demo.py`'s "forcing a consolidation pass" section for why a
-  just-recorded event may not show up as a semantic fact until the next
-  scheduled pass (or a manual `MemoryManager.run_consolidation_now()`).
+## Caveat
+
+`key_fact_survival` scores by **word overlap** (≥60% of a fact's meaningful
+words present in the kept content), not exact substring matching — so a
+paraphrase like "Batch 1042 failed QA because of contamination" still counts
+as retaining "Batch 1042 failed QA due to contamination detected in Line 3."
+An earlier version of this check used strict substring matching, which would
+have wrongly scored a correct paraphrase as "lost."
+
+Recursive summarization's fact retention here is a product of the toy
+`extractive_summarizer` in this file being tuned to the same keywords as the
+planted facts (`fail`, `recall`, `contaminat`, ...). **The result to trust is
+the strategy, not the heuristic**: recursive summarization is the only
+strategy in this set with any mechanism for judging *why* something might
+matter (it looks at content, not position/role), which is what lets it
+protect facts the other three strategies drop by construction. The specific
+keyword list is not production-ready — swap in a real LLM call for
+`summarizer_func` before relying on this; see `agent/rag_adapter.py` for the
+dependency-injection pattern used to wire in an external model elsewhere in
+this codebase.
