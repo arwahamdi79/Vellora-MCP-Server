@@ -1,5 +1,5 @@
 from typing import List
-from rag.rag.models import RAGResponse
+from rag.models import RAGResponse
 
 
 class RetrievalMetrics:

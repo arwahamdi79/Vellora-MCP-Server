@@ -1,8 +1,8 @@
 import json
 import pandas as pd
 
-from rag.rag.factory import RAGFactory
-from rag.rag.retrieval_eval.metrics import RetrievalMetrics
+from rag.factory import RAGFactory
+from retrieval_eval.metrics import RetrievalMetrics
 
 
 class RetrievalEvaluator:

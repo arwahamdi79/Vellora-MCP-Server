@@ -1,4 +1,4 @@
-from rag.rag.factory import RAGFactory
+from rag.factory import RAGFactory
 
 
 class VelloraAgent:
