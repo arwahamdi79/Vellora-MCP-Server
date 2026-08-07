@@ -71,20 +71,7 @@ No other changes needed — call sites are unchanged. See `agent/README.md`
 for the full integration flow and the bugs this integration work surfaced
 and fixed in the memory package.
 
-## Known gaps
 
-- `agent/rag_adapter.py` is real wiring against the actual `rag/` package
-  classes, but is **untested** in this environment — no network access to
-  HuggingFace (for embeddings) or an LLM. Verify it in an environment where
-  those are reachable before treating it as proven end to end.
-- Consolidation (episodic → semantic) is periodic by design, not real-time —
-  a just-recorded event may not appear as a semantic fact until the next
-  scheduled pass, or a manual `MemoryManager.run_consolidation_now()`. The
-  demo shows both paths.
-- `context_eval`'s fact-retention scoring uses word-overlap matching, not a
-  real semantic-similarity model — good enough to compare strategies against
-  each other, not a substitute for human review of what a real LLM
-  summarizer would produce.
 
 ## Further reading
 
