@@ -34,11 +34,8 @@ from .database import (
 print("Loading tools.py")
 DB_PATH = Path(__file__).parent.parent / "db" / "vellora.db"
 
-from .memory.episodic_memory import (
-    maybe_remember,
-    load_memory_context,
-)
 
+from agent.memory_adapter import maybe_remember, load_memory_context
 # --------------------------------------------------
 # Medicines
 # --------------------------------------------------

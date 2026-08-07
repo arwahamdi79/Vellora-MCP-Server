@@ -1,0 +1,17 @@
+strategy,n_messages,messages_kept,est_tokens_original,est_tokens_kept,compression_ratio,key_facts_retained,latency_ms
+sliding_window,20,15,223,155,0.695,1/2,0.006
+observation_masking,20,20,223,210,0.942,2/2,0.02
+recursive_summarization,20,20,223,223,1.0,2/2,0.019
+zone_based_pruning,20,11,223,108,0.484,1/2,0.01
+sliding_window,50,15,709,336,0.474,1/2,0.004
+observation_masking,50,50,709,691,0.975,1/2,0.037
+recursive_summarization,50,50,709,709,1.0,2/2,0.034
+zone_based_pruning,50,11,709,290,0.409,0/2,0.009
+sliding_window,100,15,1617,346,0.214,0/2,0.004
+observation_masking,100,100,1617,1025,0.634,1/2,0.071
+recursive_summarization,100,33,1617,737,0.456,2/2,0.229
+zone_based_pruning,100,11,1617,115,0.071,0/2,0.013
+sliding_window,200,15,3067,147,0.048,0/2,0.003
+observation_masking,200,200,3067,2251,0.734,1/2,0.141
+recursive_summarization,200,36,3067,624,0.203,2/2,0.294
+zone_based_pruning,200,11,3067,292,0.095,0/2,0.016
