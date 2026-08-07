@@ -1,0 +1,92 @@
+# agent — Integration Layer
+
+Wires Member 1's memory system and the existing `rag` package into the
+Vellora MCP server. This is the piece that was missing from `context_eval`
+alone: `context_eval` proves the four context strategies work in isolation,
+`agent` is where they actually get used by something that talks to a user.
+
+## Files
+
+- **`memory_adapter.py`** — drop-in replacement for the MCP server's old
+  `mcp_server/memory/episodic_memory.py` (`maybe_remember`, `load_memory_context`).
+  Same call signatures, backed by `memory.memory_manager.MemoryManager`
+  instead. One `MemoryManager` per `entity_id` (e.g. `"batch_1042"`), matching
+  the original per-entity scoping.
+
+- **`rag_adapter.py`** — wires `rag.factory.RAGFactory` behind a stable
+  `PolicyRAG.ask(query)` interface. Requires a real LLM and (for the vector
+  store) HuggingFace embeddings, neither reachable from this sandbox — see
+  the module docstring for how to instantiate it in a real environment.
+
+- **`agent.py`** — `VelloraAgent`, the actual integration point:
+
+  ```
+  User
+    |
+  VelloraAgent.handle_turn(user_message)
+    |
+  MemoryManager.get_context(strategy=...)   -> ShortTermMemory.apply_strategy()
+    |
+  PolicyRAG.ask(user_message)                -> rag.factory.RAGFactory pipeline
+    |
+  build_prompt(memory_context, rag_answer, sources, user_message)
+  ```
+
+  RAG is optional (`VelloraAgent(rag=None)` still runs the full memory half
+  of the pipeline), so the integration can be exercised without a live LLM.
+
+- **`demo.py`** — runnable end-to-end demo (`python -m agent.demo`). Memory
+  is the real `MemoryManager`; RAG is `MockPolicyRAG`, a stand-in that
+  implements the same `.ask()` interface with a tiny in-memory policy lookup
+  instead of real vector retrieval, since this sandbox can't reach
+  HuggingFace or an LLM. Swap it for `rag_adapter.build_rag(real_llm, ...)`
+  in production — nothing else in `VelloraAgent` changes.
+
+## Migration required in `mcp_server/tools.py`
+
+```diff
+- from .memory.episodic_memory import (
+-     maybe_remember,
+-     load_memory_context,
+- )
++ from agent.memory_adapter import maybe_remember, load_memory_context
+```
+
+No other changes needed in `tools.py` — every call site
+(`maybe_remember(turn_text=..., entity_id=...)` in `change_batch_status` and
+`add_quality_test`, `load_memory_context(entity_id=..., opening_message=query)`
+in `get_batch_memory`) already matches this module's signatures.
+
+## What running the demo caught
+
+Building this against the real memory package (rather than just describing
+it) surfaced three real bugs, now fixed:
+
+1. `ShortTermMemory.strategy_zone_based_pruning` required a `zones` argument
+   with no default, even though it already merges with sensible per-role
+   defaults internally — any caller not passing `zones={}` explicitly would
+   crash. Now defaults to `None` → the built-in defaults.
+
+2. `maybe_remember`'s first draft routed tool events through
+   `PromoteDropRouter`, the same importance heuristic used for organic chat
+   messages. That heuristic only gives role-based bonuses to
+   `user`/`tool`/`assistant` messages, not `system` — so a real batch status
+   change or failed QA test would usually score under the 0.6 default
+   threshold and be silently dropped. Tool events now write directly to
+   episodic memory, since the MCP tool call itself is already the "this
+   matters" decision.
+
+3. `MemoryManager.add_message` appended to a `maxlen`-bounded deque *before*
+   checking whether the buffer was full, so the oldest message could be
+   silently evicted by the deque itself before the router ever got a chance
+   to route it. Fixed to route first when already at capacity, then append.
+
+## Known gaps
+
+- `rag_adapter.py` is real wiring against the actual `rag/` classes, but
+  it's untested here — verify it in an environment with network access to
+  HuggingFace and an LLM before treating it as proven.
+- Consolidation (episodic → semantic) is periodic by design, not real-time —
+  see `demo.py`'s "forcing a consolidation pass" section for why a
+  just-recorded event may not show up as a semantic fact until the next
+  scheduled pass (or a manual `MemoryManager.run_consolidation_now()`).
