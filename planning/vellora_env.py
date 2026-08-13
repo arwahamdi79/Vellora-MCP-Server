@@ -41,21 +41,17 @@ from .domain import RecoveryPlan
 # Toolkit interop
 # --------------------------------------------------------------------------- #
 # The algorithms depend only on a small environment protocol: an object with
-# .evaluate() returning something with a score / success / feedback. Import the
-# toolkit's dataclass so traces stay in ITS format; fall back only if the import
-# path differs in your fork.
+# .evaluate(). We import the toolkit's own model so traces stay in ITS format.
 
-try:  # pragma: no cover - depends on fork layout
-    from planning_lab.algorithms.environment import EnvironmentFeedback  # type: ignore
-    _USING_TOOLKIT_FEEDBACK = True
-except Exception:  # pragma: no cover
-    _USING_TOOLKIT_FEEDBACK = False
+# VERIFIED: the toolkit defines EnvironmentFeedback in planning_lab.models as a
+# pydantic BaseModel with fields  success: bool, score: float (0..1),
+# details: list[str]  and model_config = ConfigDict(extra="forbid").
+# There is NO `feedback` field -- passing one raises a ValidationError.
 
-    @dataclass
-    class EnvironmentFeedback:  # type: ignore[no-redef]
-        score: float
-        success: bool
-        feedback: str
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).parent / "toolkit"))
+
+from planning_lab.models import EnvironmentFeedback  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -165,6 +161,7 @@ class GroundedResult:
         return all(c.passed for c in scored if c.critical)
 
     def feedback_text(self) -> str:
+        """Human-readable form, used in demo transcripts and the write gate."""
         failed = [c for c in self.scored if not c.passed]
         if not failed:
             return "All grounded checks passed."
@@ -176,6 +173,18 @@ class GroundedResult:
                 "  (not evaluated: " + ", ".join(c.name for c in skipped) + ")"
             )
         return "\n".join(lines)
+
+    def detail_lines(self) -> List[str]:
+        """EnvironmentFeedback.details is a list[str]; one line per failed
+        check so LATS reflections and Reflexion memories cite check NAMES."""
+        failed = [c for c in self.scored if not c.passed]
+        if not failed:
+            return ["All grounded checks passed."]
+        out = [f"[{c.name}] {c.detail}" for c in failed]
+        skipped = [c.name for c in self.checks if c.skipped]
+        if skipped:
+            out.append("not evaluated: " + ", ".join(skipped))
+        return out
 
     def as_trace(self) -> List[Dict[str, Any]]:
         """Extends the toolkit's JSON trace with `vellora_checks`."""
@@ -295,15 +304,15 @@ class VelloraEnvironment:
                 "```json fenced block exactly as specified.",
             )])
             self.last_result = res
-            return EnvironmentFeedback(score=0.0, success=False,
-                                       feedback=res.feedback_text())
+            return EnvironmentFeedback(success=False, score=0.0,
+                                       details=res.detail_lines())
 
         res = self.validate_plan(plan)
         self.last_result = res
         return EnvironmentFeedback(
-            score=res.score,
             success=res.success and res.score >= self.success_threshold,
-            feedback=res.feedback_text(),
+            score=res.score,
+            details=res.detail_lines(),
         )
 
     # -- the seven checks --------------------------------------------------- #
@@ -558,9 +567,9 @@ class UngroundedBaselineEnvironment:
     def evaluate(self, task: str = "", candidate: str = "", **_: Any) -> EnvironmentFeedback:
         score = self._rng.betavariate(6, 3)
         return EnvironmentFeedback(
-            score=score,
             success=score >= self.success_threshold,
-            feedback="Randomized evaluator; no connection to the database.",
+            score=score,
+            details=["Randomized evaluator; no connection to the database."],
         )
 
 

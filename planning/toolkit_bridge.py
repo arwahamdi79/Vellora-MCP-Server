@@ -1,8 +1,7 @@
 """
 planning/toolkit_bridge.py — the ONLY file that touches toolkit internals.
 
-Everything else in planning/ imports from here, so when your fork's signatures
-differ from what's assumed below, there is exactly one file to fix.
+VERIFIED against the real fork API (introspected 2026-08-13). No guesses left.
 
 Design rule for this whole folder:
     The toolkit owns the SEARCH. We own the DOMAIN.
@@ -10,26 +9,43 @@ Design rule for this whole folder:
     formula, or a topological sort. If you find yourself writing one, stop --
     that is the 50% penalty clause.
 
-What we DO here:
-  * swap the model provider (toolkit ships ChatMistralAI; use whatever your
-    repo already uses so you have one provider, one key, one cost model)
-  * inject VelloraEnvironment where the toolkit constructs its randomized one
-  * wrap each entry point so calls/tokens/latency land in the toolkit's own
-    artifacts/ trace rather than a second logging system
+Real toolkit API
+----------------
+decomposition.decompose_goal(goal, llm) -> Plan
+decomposition.execute_plan(plan, llm, max_workers=4) -> dict[str, str]
+decomposition.final_output(plan, outputs) -> str
+dynamic_decomposition.dynamic_decomposition(goal, llm, max_steps=4)
+        -> list[tuple[str, str]]        # (instruction, observation) pairs
+plan_and_solve.plan_and_solve(question, llm) -> str
+tree_of_thoughts.tree_of_thoughts(problem, llm, depth=2, beam_width=2)
+        -> list[Thought]
+lats.lats(task, llm, environment, iterations=2, n_actions=2,
+          exploration_weight=1.414) -> LATSResult
+lats.flatten_lats_tree(root) -> list[dict]
+self_refine.reflect_and_refine(goal, draft, llm) -> ReflectionResult
+self_refine.deterministic_checks(goal, draft) -> list[str]
+reflexion.reflexion(task, llm, environment, max_trials=3, memory_size=3)
+        -> ReflexionResult
 
-Run `python -m planning.toolkit_bridge --introspect` to print the real
-signatures of your fork. Fix the ADAPT blocks against that output.
+Note what is NOT there: decompose_goal and dynamic_decomposition take no
+`environment`. Grounding for the decomposition modes therefore happens in OUR
+node executor, not inside the toolkit's planners.
 """
 
 from __future__ import annotations
+
+import sys
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent / "toolkit"))
 
 import argparse
 import importlib
 import inspect
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 TOOLKIT_ROOT = "planning_lab.algorithms"
 
@@ -49,24 +65,37 @@ def load(name: str):
     return importlib.import_module(MODULES[name])
 
 
+# Re-export the toolkit's own models so nothing downstream redefines them.
+from planning_lab.models import (  # noqa: E402
+    EnvironmentFeedback,
+    Plan,
+    Task,
+    Thought,
+)
+
+__all__ = [
+    "EnvironmentFeedback", "Plan", "Task", "Thought",
+    "build_model", "build_independent_critic", "metered", "Usage",
+    "decompose_goal", "execute_plan", "final_output",
+    "dynamic_decomposition", "plan_and_solve", "tree_of_thoughts",
+    "lats", "flatten_lats_tree", "reflect_and_refine",
+    "deterministic_checks", "reflexion",
+]
+
+
 # --------------------------------------------------------------------------- #
-# 1. Model provider swap
+# 1. Model provider
 # --------------------------------------------------------------------------- #
-# The toolkit builds ChatMistralAI(...).with_structured_output(schema,
-# method="json_schema"). Keep that INTERFACE -- the algorithms depend on getting
-# a structured object back -- and only change which client produces it.
+# The toolkit calls llm.with_structured_output(schema, method="json_schema").
+# Keep that INTERFACE; only change which client provides it.
 #
-# ADAPT: point this at whatever your repo already uses (the same client your
-# memory/RAG agent uses). One provider across the repo means one key in .env and
-# one cost-per-token constant in the comparison table.
+# ADAPT: if the team is already on OpenAI/Gemini elsewhere in the repo, swap the
+# constructor here so the whole repo has one provider, one key in .env, and one
+# cost-per-token constant in the comparison table.
 
 def build_model(model_name: Optional[str] = None, temperature: float = 0.2):
-    """
-    Return a chat model exposing `.with_structured_output(schema, method=...)`
-    and `.invoke(...)`, i.e. a LangChain BaseChatModel.
-    """
     # --- ADAPT START ---
-    from langchain_mistralai import ChatMistralAI  # noqa: F401
+    from langchain_mistralai import ChatMistralAI
     return ChatMistralAI(
         model=model_name or "mistral-large-latest",
         temperature=temperature,
@@ -77,8 +106,7 @@ def build_model(model_name: Optional[str] = None, temperature: float = 0.2):
 def build_independent_critic():
     """
     A DIFFERENT model from build_model(), for the independent-critic ablation
-    the brief asks for ("test how making an independent critic (a different LLM)
-    would change the evaluation").
+    the brief asks for. Used in planning/critique.py.
     """
     # --- ADAPT START ---
     return build_model(model_name="mistral-small-latest", temperature=0.0)
@@ -86,12 +114,11 @@ def build_independent_critic():
 
 
 # --------------------------------------------------------------------------- #
-# 2. Cost / call accounting
+# 2. Call / token / latency accounting
 # --------------------------------------------------------------------------- #
-# The comparison table needs calls, tokens, latency and cost per run. Rather
-# than instrumenting seven algorithm files, wrap the model object once: every
-# algorithm goes through it, so every call is counted regardless of which search
-# loop made it.
+# The comparison table needs calls, tokens, latency and cost per run. Wrap the
+# model once instead of instrumenting seven algorithm files: every algorithm
+# receives this object, so every call is counted whichever search loop makes it.
 
 @dataclass
 class Usage:
@@ -120,24 +147,28 @@ class Usage:
 
 class MeteredModel:
     """
-    Transparent proxy that counts calls and tokens.
+    Counting proxy around a LangChain chat model.
 
-    Wraps any LangChain chat model, including the object returned by
-    .with_structured_output(), so structured calls are metered too.
+    Forwards unknown attributes to the wrapped client, so it survives duck
+    typing. If a toolkit function ever does a hard
+    `isinstance(llm, BaseChatModel)` check, pass the raw model instead and read
+    call counts off the artifacts/ trace.
     """
 
     def __init__(self, inner: Any, usage: Usage) -> None:
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_usage", usage)
 
-    def _meter(self, fn: Callable, *a, **kw):
+    def _meter(self, fn, *a, **kw):
         u: Usage = object.__getattribute__(self, "_usage")
         t0 = time.perf_counter()
         out = fn(*a, **kw)
         u.seconds += time.perf_counter() - t0
         u.calls += 1
-        meta = getattr(out, "usage_metadata", None) or getattr(
-            out, "response_metadata", {}).get("token_usage", {})
+        meta = getattr(out, "usage_metadata", None)
+        if not meta:
+            rm = getattr(out, "response_metadata", {}) or {}
+            meta = rm.get("token_usage", {}) if isinstance(rm, dict) else {}
         if isinstance(meta, dict):
             u.prompt_tokens += int(meta.get("input_tokens")
                                    or meta.get("prompt_tokens") or 0)
@@ -158,109 +189,89 @@ class MeteredModel:
 
 
 @contextmanager
-def metered(model_name: Optional[str] = None):
-    """`with metered() as (model, usage): ...` — usage is filled in on exit."""
+def metered(model_name: Optional[str] = None, temperature: float = 0.2):
+    """
+    Usage:
+        with metered() as (llm, usage):
+            answer = plan_and_solve("...", llm)
+        print(usage.as_trace())
+    """
     usage = Usage()
-    yield MeteredModel(build_model(model_name), usage), usage
+    yield MeteredModel(build_model(model_name, temperature), usage), usage
 
 
 # --------------------------------------------------------------------------- #
-# 3. Entry points
+# 3. Entry points — direct pass-throughs to the verified signatures
 # --------------------------------------------------------------------------- #
-# Thin pass-throughs. The ADAPT blocks are where fork signatures differ.
-# `python -m planning.toolkit_bridge --introspect` prints the truth.
 
-def run_decomposition_first(request: str, model, *, environment=None, **kw):
-    """algorithms/decomposition.py — full plan up front, topological execution."""
-    m = load("decomposition")
-    # --- ADAPT START ---
-    fn = _first_callable(m, ["run", "run_decomposition", "decompose_and_execute",
-                             "execute", "main"])
-    return _call(fn, request=request, model=model, environment=environment, **kw)
-    # --- ADAPT END ---
+def decompose_goal(goal: str, llm) -> "Plan":
+    """Decomposition-first: whole plan up front. Returns a validated Plan;
+    models.Plan.validate_dag already rejects cycles at construction time."""
+    return load("decomposition").decompose_goal(goal, llm)
 
 
-def run_dynamic_decomposition(request: str, model, *, environment=None, **kw):
-    """algorithms/dynamic_decomposition.py — next sub-task after each observation."""
-    m = load("dynamic_decomposition")
-    fn = _first_callable(m, ["run", "run_dynamic", "dynamic_decompose",
-                             "execute", "main"])
-    return _call(fn, request=request, model=model, environment=environment, **kw)
+def execute_plan(plan: "Plan", llm, max_workers: int = 4) -> Dict[str, str]:
+    """Runs the plan in dependency-safe parallel batches. Batch structure comes
+    from plan.execution_batches() -- do not re-schedule it yourself."""
+    return load("decomposition").execute_plan(plan, llm, max_workers=max_workers)
 
 
-def run_plan_and_solve(task: str, model, **kw):
-    m = load("plan_and_solve")
-    fn = _first_callable(m, ["run", "plan_and_solve", "solve", "main"])
-    return _call(fn, task=task, model=model, **kw)
+def final_output(plan: "Plan", outputs: Dict[str, str]) -> str:
+    return load("decomposition").final_output(plan, outputs)
 
 
-def run_tree_of_thoughts(task: str, model, *, depth: int = 2,
-                         beam_width: int = 2, **kw):
-    m = load("tree_of_thoughts")
-    fn = _first_callable(m, ["run", "tree_of_thoughts", "search", "main"])
-    return _call(fn, task=task, model=model, depth=depth,
-                 beam_width=beam_width, **kw)
+def dynamic_decomposition(goal: str, llm, max_steps: int = 4) -> List[Tuple[str, str]]:
+    """Interleaved: next sub-task chosen after observing the last result.
+    Returns (instruction, observation) pairs in execution order."""
+    return load("dynamic_decomposition").dynamic_decomposition(
+        goal, llm, max_steps=max_steps)
 
 
-def run_lats(task: str, model, environment, *, iterations: int = 2,
-             n_actions: int = 2, **kw):
+def plan_and_solve(question: str, llm) -> str:
+    return load("plan_and_solve").plan_and_solve(question, llm)
+
+
+def tree_of_thoughts(problem: str, llm, depth: int = 2,
+                     beam_width: int = 2) -> List["Thought"]:
+    return load("tree_of_thoughts").tree_of_thoughts(
+        problem, llm, depth=depth, beam_width=beam_width)
+
+
+def lats(task: str, llm, environment, iterations: int = 2, n_actions: int = 2,
+         exploration_weight: float = 1.414):
     """
-    algorithms/lats.py. `environment` MUST be a VelloraEnvironment for any run
-    you report as grounded. Passing the toolkit default here and calling it
-    grounded is the exact failure the guardrails describe.
+    `environment` MUST be a VelloraEnvironment for any run reported as grounded.
+    Passing the toolkit's randomized default here and calling it grounded is the
+    exact failure the guardrails describe.
     """
-    m = load("lats")
-    fn = _first_callable(m, ["run", "lats", "search", "main"])
-    return _call(fn, task=task, model=model, environment=environment,
-                 iterations=iterations, n_actions=n_actions, **kw)
+    return load("lats").lats(task, llm, environment, iterations=iterations,
+                             n_actions=n_actions,
+                             exploration_weight=exploration_weight)
 
 
-def run_self_refine(task: str, model, *, critic=None, rubric: str = "", **kw):
-    m = load("self_refine")
-    fn = _first_callable(m, ["run", "self_refine", "refine", "main"])
-    return _call(fn, task=task, model=model, critic=critic, rubric=rubric, **kw)
+def flatten_lats_tree(root) -> List[dict]:
+    """Node-by-node MCTS record: visits, environment_score, model_score,
+    feedback. Evidence for the ToT-self-score vs LATS-env-score comparison."""
+    return load("lats").flatten_lats_tree(root)
 
 
-def run_reflexion(task: str, model, environment, *, max_trials: int = 3,
-                  memory_size: int = 2, **kw):
-    """memory_size=0 is the ablation that proves the episodic buffer does work."""
-    m = load("reflexion")
-    fn = _first_callable(m, ["run", "reflexion", "main"])
-    return _call(fn, task=task, model=model, environment=environment,
-                 max_trials=max_trials, memory_size=memory_size, **kw)
+def reflect_and_refine(goal: str, draft: str, llm):
+    """Self-Refine: one draft in, critique + revision out."""
+    return load("self_refine").reflect_and_refine(goal, draft, llm)
 
 
-# --------------------------------------------------------------------------- #
-# Tolerant dispatch helpers
-# --------------------------------------------------------------------------- #
-
-def _first_callable(module, names: List[str]):
-    for n in names:
-        fn = getattr(module, n, None)
-        if callable(fn):
-            return fn
-    public = [n for n, o in vars(module).items()
-              if callable(o) and not n.startswith("_")]
-    raise AttributeError(
-        f"{module.__name__}: none of {names} found. Public callables: {public}. "
-        f"Update the ADAPT block in planning/toolkit_bridge.py."
-    )
+def deterministic_checks(goal: str, draft: str) -> List[str]:
+    """The toolkit's own non-LLM checks. Our grounded rubric checks in
+    planning/critique.py extend these rather than replacing them."""
+    return load("self_refine").deterministic_checks(goal, draft)
 
 
-def _call(fn, **kwargs):
-    """Drop kwargs the target doesn't accept, so signature drift degrades loudly
-    but doesn't crash on an unrelated parameter name."""
-    sig = inspect.signature(fn)
-    if any(p.kind is inspect.Parameter.VAR_KEYWORD
-           for p in sig.parameters.values()):
-        return fn(**{k: v for k, v in kwargs.items() if v is not None})
-    accepted = set(sig.parameters)
-    dropped = {k for k, v in kwargs.items() if k not in accepted and v is not None}
-    if dropped:
-        print(f"[toolkit_bridge] {fn.__qualname__} does not accept {sorted(dropped)}"
-              f" — check the ADAPT block. Accepted: {sorted(accepted)}")
-    return fn(**{k: v for k, v in kwargs.items()
-                 if k in accepted and v is not None})
+def reflexion(task: str, llm, environment, max_trials: int = 3,
+              memory_size: int = 3):
+    """memory_size=0 is the ablation proving the episodic buffer does work."""
+    return load("reflexion").reflexion(task, llm, environment,
+                                       max_trials=max_trials,
+                                       memory_size=memory_size)
 
 
 # --------------------------------------------------------------------------- #
@@ -269,7 +280,7 @@ def _call(fn, **kwargs):
 
 def introspect() -> None:
     print("Toolkit API as actually present in your fork:\n")
-    for key, path in MODULES.items():
+    for path in MODULES.values():
         try:
             m = importlib.import_module(path)
         except Exception as exc:
