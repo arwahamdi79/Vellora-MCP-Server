@@ -10,3 +10,6 @@ __pycache__/
 
 # Logs
 *.log
+venv/
+
+*.db.bak

@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-08-14T16:32:08.124106+00:00",
+  "case_id": "DEC-DYNAMIC-02",
+  "mode": "dynamic",
+  "goal": "We have a sterility failure on batch 21. Work out the blast radius and recall whatever needs recalling.",
+  "plan_task_ids": [],
+  "execution_batches": [],
+  "dynamic_steps": [],
+  "nodes": [],
+  "final_output": "",
+  "total_usage": {},
+  "wall_seconds": 40.56,
+  "error": "HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completions: {\"object\":\"error\",\"message\":\"Service unavailable.\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"3831\",\"raw_status_code\":503}"
+}
