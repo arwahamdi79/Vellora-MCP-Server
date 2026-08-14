@@ -82,6 +82,13 @@ class ImpactTrace:
     location_linked: List[Dict[str, Any]] = field(default_factory=list)
     #: Batches already carrying a Product_Recall row (UNIQUE blocks a second).
     already_recalled: List[int] = field(default_factory=list)
+    #: The legal values a plan may reference. Without these in the prompt the
+    #: task is impossible and the model invents ids, which measures
+    #: hallucination rather than planning.
+    qa_managers: List[Dict[str, Any]] = field(default_factory=list)
+    production_staff: List[Dict[str, Any]] = field(default_factory=list)
+    suppliers: List[Dict[str, Any]] = field(default_factory=list)
+    medicines: List[Dict[str, Any]] = field(default_factory=list)
 
     def all_linked_ids(self) -> List[int]:
         seen = {self.failed_batch.get("BatchID")}
@@ -121,7 +128,39 @@ CO-LOCATED (same storage location — weakest linkage)
 {fmt(self.location_linked)}
 
 ALREADY RECALLED (Product_Recall.BatchID is UNIQUE; a second recall row is \
-impossible for these): {self.already_recalled or 'none'}"""
+impossible for these): {self.already_recalled or 'none'}
+
+VALID IDS — every id in your answer must come from these lists
+  Active QA Managers (only these may authorize a recall):
+{self._fmt_people(self.qa_managers)}
+  Active Production Staff (only these may own a production order):
+{self._fmt_people(self.production_staff)}
+  Suppliers (supplier {fb.get('SupplierID')} is IMPLICATED — do not re-order from it):
+{self._fmt_suppliers()}
+  Medicines involved:
+{self._fmt_medicines()}"""
+
+    @staticmethod
+    def _fmt_people(people) -> str:
+        if not people:
+            return "    (none)"
+        return "\n".join(f"    EmployeeID {p['EmployeeID']}: {p['FullName']} "
+                          f"({p['Role']})" for p in people)
+
+    def _fmt_suppliers(self) -> str:
+        implicated = self.failed_batch.get("SupplierID")
+        if not self.suppliers:
+            return "    (none)"
+        return "\n".join(
+            f"    SupplierID {s['SupplierID']}: {s['CompanyName']}"
+            + ("   <-- IMPLICATED" if s["SupplierID"] == implicated else "")
+            for s in self.suppliers)
+
+    def _fmt_medicines(self) -> str:
+        if not self.medicines:
+            return "    (none)"
+        return "\n".join(f"    MedicineID {m['MedicineID']}: {m['MedicineName']}"
+                          for m in self.medicines)
 
 
 class ImpactTracer:
@@ -189,10 +228,32 @@ class ImpactTracer:
             recalled = [r[0] for r in conn.execute(
                 "SELECT BatchID FROM Product_Recall")]
 
+            qa_managers = [dict(r) for r in conn.execute(
+                """SELECT EmployeeID, FullName, Role FROM Employee
+                    WHERE Role = 'QA Manager' AND AccountStatus = 'Active'
+                    ORDER BY EmployeeID""")]
+            production_staff = [dict(r) for r in conn.execute(
+                """SELECT EmployeeID, FullName, Role FROM Employee
+                    WHERE Role IN ('Production Staff', 'Operations Manager')
+                      AND AccountStatus = 'Active'
+                    ORDER BY EmployeeID""")]
+            suppliers = [dict(r) for r in conn.execute(
+                "SELECT SupplierID, CompanyName FROM Supplier ORDER BY SupplierID")]
+
+            medicine_ids = {fb["MedicineID"]} | {
+                b["MedicineID"] for b in siblings + supplier_linked}
+            marks = ",".join("?" * len(medicine_ids))
+            medicines = [dict(r) for r in conn.execute(
+                f"""SELECT MedicineID, MedicineName FROM Medicine
+                     WHERE MedicineID IN ({marks}) ORDER BY MedicineID""",
+                tuple(medicine_ids))]
+
         return ImpactTrace(
             failed_batch=fb, siblings=siblings,
             supplier_linked=supplier_linked, location_linked=location_linked,
             already_recalled=sorted(recalled),
+            qa_managers=qa_managers, production_staff=production_staff,
+            suppliers=suppliers, medicines=medicines,
         )
 
 

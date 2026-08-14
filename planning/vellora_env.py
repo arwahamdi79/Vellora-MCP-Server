@@ -271,6 +271,7 @@ class VelloraEnvironment(Environment):
                 self._check_recall_authorizer,
                 self._check_order_owner,
                 self._check_payload_validation,
+                self._check_no_over_scoping,
             ):
                 name = fn.__name__.replace("_check_", "")
                 try:
@@ -506,6 +507,66 @@ class VelloraEnvironment(Environment):
             return Check("payload_validation", False, "; ".join(problems))
         return Check("payload_validation", True,
                      f"{len(plan.replacement_orders)} payload(s) validate")
+
+
+    # 8 --------------------------------------------------------------------- #
+    def _check_no_over_scoping(self, conn, plan, ctx) -> Check:
+        """
+        The other direction of the cost asymmetry.
+
+        Containing a batch that is neither a sibling nor material-linked scraps
+        saleable stock for no evidential reason. Co-location is NOT sufficient:
+        two batches sharing a warehouse three months apart have no production
+        linkage, and the trace surfaces them only as weak context.
+
+        Without this check the environment rewards "recall everything
+        distributed", which is the failure mode a real QA department is most
+        afraid of after under-containment.
+        """
+        if not ctx:
+            return Check("no_over_scoping", False,
+                         "no failed batch context", skipped=True)
+
+        siblings = {r["BatchID"] for r in self._rows(conn, """
+            SELECT BatchID FROM Manufacturing_Batch
+             WHERE ProductionOrderID = ?
+        """, (ctx["ProductionOrderID"],))}
+
+        supplier_linked = {r["BatchID"] for r in self._rows(conn, """
+            SELECT b.BatchID
+              FROM Manufacturing_Batch b
+              JOIN Production_Order o
+                ON o.ProductionOrderID = b.ProductionOrderID
+             WHERE o.SupplierID = ?
+               AND ABS(julianday(b.ManufacturingDate) - julianday(?)) <= ?
+        """, (ctx["SupplierID"], ctx["ManufacturingDate"], self.window_days))}
+
+        justified = siblings | supplier_linked
+        extras = sorted(set(plan.contained_batch_ids) - justified)
+        if extras:
+            rows = self._rows(conn, f"""
+                SELECT b.BatchID, m.MedicineName, o.SupplierID,
+                       b.ManufacturingDate
+                  FROM Manufacturing_Batch b
+                  JOIN Production_Order o
+                    ON o.ProductionOrderID = b.ProductionOrderID
+                  JOIN Medicine m ON m.MedicineID = b.MedicineID
+                 WHERE b.BatchID IN ({",".join("?" * len(extras))})
+            """, extras)
+            why = "; ".join(
+                f"batch {r['BatchID']} ({r['MedicineName']}, supplier "
+                f"{r['SupplierID']}, made {r['ManufacturingDate']})"
+                for r in rows)
+            return Check(
+                "no_over_scoping", False,
+                f"contained without production linkage: {why}. These share "
+                f"neither the failed production order nor supplier "
+                f"{ctx['SupplierID']} inside the {self.window_days}-day window. "
+                f"Containing them scraps saleable stock. Co-location alone is "
+                f"not evidence of contamination.")
+        return Check("no_over_scoping", True,
+                     f"all {len(plan.contained_batch_ids)} contained batches "
+                     f"have production or material linkage")
 
 
 # --------------------------------------------------------------------------- #

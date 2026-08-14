@@ -42,6 +42,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent / "toolkit"))
 import argparse
 import importlib
 import inspect
+import os
+import random as _random
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -66,6 +69,8 @@ def load(name: str):
 
 
 # Re-export the toolkit's own models so nothing downstream redefines them.
+from langchain_core.callbacks import BaseCallbackHandler  # noqa: E402
+
 from planning_lab.models import (  # noqa: E402
     EnvironmentFeedback,
     Plan,
@@ -93,12 +98,19 @@ __all__ = [
 # constructor here so the whole repo has one provider, one key in .env, and one
 # cost-per-token constant in the comparison table.
 
-def build_model(model_name: Optional[str] = None, temperature: float = 0.2):
+#: Override per run without editing code: VELLORA_MODEL / VELLORA_CRITIC_MODEL.
+DEFAULT_MODEL = os.getenv("VELLORA_MODEL", "mistral-large-latest")
+CRITIC_MODEL = os.getenv("VELLORA_CRITIC_MODEL", "mistral-small-latest")
+
+
+def build_model(model_name: Optional[str] = None, temperature: float = 0.2,
+                callbacks: Optional[list] = None):
     # --- ADAPT START ---
     from langchain_mistralai import ChatMistralAI
     return ChatMistralAI(
-        model=model_name or "mistral-large-latest",
+        model=model_name or DEFAULT_MODEL,
         temperature=temperature,
+        callbacks=callbacks or [],
     )
     # --- ADAPT END ---
 
@@ -109,7 +121,7 @@ def build_independent_critic():
     the brief asks for. Used in planning/critique.py.
     """
     # --- ADAPT START ---
-    return build_model(model_name="mistral-small-latest", temperature=0.0)
+    return build_model(model_name=CRITIC_MODEL, temperature=0.0)
     # --- ADAPT END ---
 
 
@@ -145,9 +157,51 @@ class Usage:
         }
 
 
+# --------------------------------------------------------------------------- #
+# Rate limiting
+# --------------------------------------------------------------------------- #
+# Mistral's free tier allows roughly one request per second. ToT and LATS fire
+# calls in tight loops, so without throttling a single search run dies on 429
+# partway through and the trace is useless. Throttle + retry live HERE, in the
+# one object every algorithm receives, rather than in seven algorithm files.
+#
+# Tune without editing code:
+#   VELLORA_MIN_CALL_INTERVAL  seconds between calls   (default 1.5)
+#   VELLORA_MAX_RETRIES        429 retry attempts      (default 6)
+
+MIN_CALL_INTERVAL = float(os.getenv("VELLORA_MIN_CALL_INTERVAL", "1.5"))
+MAX_RETRIES = int(os.getenv("VELLORA_MAX_RETRIES", "6"))
+
+_THROTTLE_LOCK = threading.Lock()
+_LAST_CALL_AT = [0.0]
+
+
+def _throttle() -> None:
+    """Global across every MeteredModel, including structured-output proxies and
+    any parallel batch, because the rate limit is per API key, not per object."""
+    with _THROTTLE_LOCK:
+        wait = MIN_CALL_INTERVAL - (time.monotonic() - _LAST_CALL_AT[0])
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_CALL_AT[0] = time.monotonic()
+
+
+#: Transient upstream failures worth retrying. 429 is the free-tier rate limit;
+#: 5xx are provider outages, which are common enough during a multi-hour
+#: evaluation run to abort it if unhandled.
+_RETRYABLE_MARKERS = ("429", "500", "502", "503", "504", "rate limit",
+                      "rate_limited", "service unavailable", "timeout",
+                      "timed out", "connection reset", "internal_server_error")
+
+
+def _is_retryable(exc: Exception) -> bool:
+    text = f"{exc}".lower()
+    return any(marker in text for marker in _RETRYABLE_MARKERS)
+
+
 class MeteredModel:
     """
-    Counting proxy around a LangChain chat model.
+    Counting, throttling, retrying proxy around a LangChain chat model.
 
     Forwards unknown attributes to the wrapped client, so it survives duck
     typing. If a toolkit function ever does a hard
@@ -161,20 +215,33 @@ class MeteredModel:
 
     def _meter(self, fn, *a, **kw):
         u: Usage = object.__getattribute__(self, "_usage")
-        t0 = time.perf_counter()
-        out = fn(*a, **kw)
-        u.seconds += time.perf_counter() - t0
-        u.calls += 1
-        meta = getattr(out, "usage_metadata", None)
-        if not meta:
-            rm = getattr(out, "response_metadata", {}) or {}
-            meta = rm.get("token_usage", {}) if isinstance(rm, dict) else {}
-        if isinstance(meta, dict):
-            u.prompt_tokens += int(meta.get("input_tokens")
-                                   or meta.get("prompt_tokens") or 0)
-            u.completion_tokens += int(meta.get("output_tokens")
-                                       or meta.get("completion_tokens") or 0)
-        return out
+        last: Optional[Exception] = None
+        for attempt in range(MAX_RETRIES):
+            _throttle()
+            t0 = time.perf_counter()
+            try:
+                out = fn(*a, **kw)
+            except Exception as exc:
+                u.seconds += time.perf_counter() - t0
+                if not _is_retryable(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                last = exc
+                # Exponential backoff with jitter, so parallel batches do not
+                # retry in lockstep and re-trigger the limit together.
+                backoff = min(2 ** attempt, 30) + _random.uniform(0, 1)
+                print(f"[toolkit_bridge] transient error, retrying in "
+                      f"{backoff:.1f}s (attempt {attempt + 1}/{MAX_RETRIES}): "
+                      f"{str(exc)[:90]}")
+                time.sleep(backoff)
+                continue
+            u.seconds += time.perf_counter() - t0
+            u.calls += 1
+            # Tokens are accumulated by _UsageCallback, NOT here. Structured
+            # output (which ToT and LATS both use) returns a Pydantic object
+            # with no usage_metadata, so reading the return value would count
+            # zero for exactly the methods whose cost matters most.
+            return out
+        raise RuntimeError(f"exhausted {MAX_RETRIES} retries") from last
 
     def invoke(self, *a, **kw):
         return self._meter(object.__getattribute__(self, "_inner").invoke, *a, **kw)
@@ -188,6 +255,37 @@ class MeteredModel:
         return getattr(object.__getattribute__(self, "_inner"), item)
 
 
+class _UsageCallback(BaseCallbackHandler):
+    """
+    Token accounting at the model level.
+
+    Fires for every completion regardless of whether the caller used .invoke()
+    or .with_structured_output(), which is the only way to get honest token
+    counts for Tree of Thoughts and LATS.
+    """
+
+    def __init__(self, usage: Usage) -> None:
+        self.usage = usage
+
+    def on_llm_end(self, response, **kwargs) -> None:  # noqa: D102
+        out = getattr(response, "llm_output", None) or {}
+        tu = out.get("token_usage") or out.get("usage") or {}
+        if not tu:
+            for gen_list in getattr(response, "generations", []) or []:
+                for gen in gen_list:
+                    msg = getattr(gen, "message", None)
+                    tu = getattr(msg, "usage_metadata", None) or {}
+                    if tu:
+                        break
+                if tu:
+                    break
+        if isinstance(tu, dict) and tu:
+            self.usage.prompt_tokens += int(tu.get("prompt_tokens")
+                                            or tu.get("input_tokens") or 0)
+            self.usage.completion_tokens += int(tu.get("completion_tokens")
+                                                or tu.get("output_tokens") or 0)
+
+
 @contextmanager
 def metered(model_name: Optional[str] = None, temperature: float = 0.2):
     """
@@ -197,7 +295,13 @@ def metered(model_name: Optional[str] = None, temperature: float = 0.2):
         print(usage.as_trace())
     """
     usage = Usage()
-    yield MeteredModel(build_model(model_name, temperature), usage), usage
+    model = build_model(model_name, temperature,
+                        callbacks=[_UsageCallback(usage)])
+    yield MeteredModel(model, usage), usage
+    if usage.calls and usage.total_tokens == 0:
+        print("[toolkit_bridge] WARNING: 0 tokens counted across "
+              f"{usage.calls} calls. The provider is not reporting usage; the "
+              "token column of the comparison table will be empty.")
 
 
 # --------------------------------------------------------------------------- #

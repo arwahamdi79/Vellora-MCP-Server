@@ -294,31 +294,37 @@ class ContainmentPlan:
 #: An unparseable candidate scores 0 and wastes a whole MCTS rollout, so keep
 #: this verbatim in the prompt.
 PLAN_OUTPUT_CONTRACT = """
-Return your answer as a single JSON object inside a ```json fenced block:
+Return your answer as a single JSON object inside a ```json fenced block, with
+exactly these keys:
 
 ```json
 {
-  "reject_batch_ids": [1043, 1044],
-  "recall_batch_ids": [1042],
-  "recall_authorizer_employee_id": 17,
-  "recall_reason": "one sentence naming the failed test and the linkage",
+  "reject_batch_ids": [<batch ids that stay inside the plant>],
+  "recall_batch_ids": [<batch ids that reached customers>],
+  "recall_authorizer_employee_id": <EmployeeID of an Active QA Manager>,
+  "recall_reason": "<one sentence naming the failed test and the linkage>",
   "replacement_orders": [
     {
-      "medicine_id": 12,
-      "supplier_id": 9,
-      "planned_quantity": 5000,
-      "responsible_employee_id": 31
+      "medicine_id": <MedicineID>,
+      "supplier_id": <SupplierID, NOT the implicated one>,
+      "planned_quantity": <positive integer>,
+      "responsible_employee_id": <EmployeeID of Active Production Staff>
     }
   ],
-  "watch_batch_ids": [1051],
-  "rationale": "one short paragraph"
+  "watch_batch_ids": [<batch ids linked but not actionable>],
+  "rationale": "<one short paragraph>"
 }
 ```
+
+Every id must come from the VALID IDS section above. Do not invent ids and do
+not copy the angle-bracket placeholders.
 
 Rules you must respect:
 - Only batches with BatchStatus 'Distributed' belong in recall_batch_ids.
 - Batches still inside the plant belong in reject_batch_ids.
+- A batch that already has a Product_Recall row can be neither recalled again
+  nor rejected; it belongs in watch_batch_ids.
 - recall_authorizer_employee_id must be an Active employee whose Role is
-  exactly 'QA Manager'.
+  exactly 'QA Manager'. 'QA Staff' is a different role and is not permitted.
 - replacement_orders must not use the supplier implicated in the failure.
 """.strip()
