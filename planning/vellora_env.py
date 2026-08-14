@@ -1,122 +1,55 @@
 """
 planning/vellora_env.py — the GROUNDED environment.
 
-This is the drop-in replacement for the toolkit's `algorithms/environment.py`,
-whose `Environment.evaluate()` returns a beta-distributed random score with no
-connection to reality. Every score produced here comes from a real query against
-db/vellora.db and, where wired, a dry-run through mcp_server/validation.py.
+Replaces the toolkit's algorithms/environment.py, whose Environment.evaluate()
+returns round(rng.betavariate(5.0, 2.0), 4) and explicitly discards the
+candidate ("del state"). Every score produced here comes from a real query
+against db/vellora.db plus a dry run through mcp_server/validation.py.
 
 Nothing in this file asks a model whether it is happy with its own output.
 
+INTERFACE (verified against the fork):
+    class Environment:
+        def evaluate(self, state: str) -> EnvironmentFeedback
+    EnvironmentFeedback(success: bool, score: float, details: list[str])
+    ...with model_config extra="forbid", so no additional fields.
+
+We subclass Environment so `isinstance` checks inside lats.py and reflexion.py
+cannot reject us.
+
 Used by:
-  - LATS external feedback (planning/routing.py -> HIGH_BRANCH_VALIDATED)
-  - Reflexion's evaluate step (planning/critique.py)
-  - The T6 write gate (refuses to commit unless success=True)
-
-------------------------------------------------------------------------------
-WIRING NOTE
-------------------------------------------------------------------------------
-`SCHEMA` below maps logical names -> your real table/column names. It is written
-against the names visible in your repo (BatchID, MedicineID, SupplierID, Status,
-employees with Role/Status, production_orders, quality_tests). Run
-
-    python -m planning.vellora_env --introspect --db db/vellora.db
-
-and it will print exactly which mappings do not match your schema. Fix the dict,
-not the queries.
+  - LATS external feedback         (routing: HIGH_BRANCH_VALIDATED)
+  - Reflexion's evaluate step      (planning/critique.py)
+  - The t7_commit write gate       (refuses to write unless success=True)
 """
 
 from __future__ import annotations
 
+import sys
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent / "toolkit"))
+
 import argparse
 import json
+import random
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
-from .domain import RecoveryPlan
-
-# --------------------------------------------------------------------------- #
-# Toolkit interop
-# --------------------------------------------------------------------------- #
-# The algorithms depend only on a small environment protocol: an object with
-# .evaluate(). We import the toolkit's own model so traces stay in ITS format.
-
-# VERIFIED: the toolkit defines EnvironmentFeedback in planning_lab.models as a
-# pydantic BaseModel with fields  success: bool, score: float (0..1),
-# details: list[str]  and model_config = ConfigDict(extra="forbid").
-# There is NO `feedback` field -- passing one raises a ValidationError.
-
-import sys as _sys, pathlib as _pathlib
-_sys.path.insert(0, str(_pathlib.Path(__file__).parent / "toolkit"))
-
+from planning_lab.algorithms.environment import Environment  # noqa: E402
 from planning_lab.models import EnvironmentFeedback  # noqa: E402
 
+from .domain import (  # noqa: E402
+    ContainmentPlan,
+    DISTRIBUTED_STATUSES,
+    INTERNAL_STATUSES,
+    ORDER_OWNER_ROLES,
+    RECALL_AUTHORIZER_ROLES,
+)
 
-# --------------------------------------------------------------------------- #
-# Schema mapping  <-- EDIT THIS, NOT THE QUERIES
-# --------------------------------------------------------------------------- #
-
-SCHEMA: Dict[str, Dict[str, str]] = {
-    "batches": {
-        "table": "batches",
-        "id": "BatchID",
-        "medicine_id": "MedicineID",
-        "line_id": "LineID",
-        "status": "Status",
-        "supplier_lot": "SupplierLot",
-        "supplier_id": "SupplierID",
-        "produced_on": "ProductionDate",
-        "expiry": "ExpiryDate",
-        "quantity": "Quantity",
-    },
-    "production_orders": {
-        "table": "production_orders",
-        "id": "OrderID",
-        "medicine_id": "MedicineID",
-        "line_id": "LineID",
-        "quantity": "Quantity",
-        "supplier_id": "SupplierID",
-        "status": "Status",
-        "start": "StartDate",
-        "end": "EndDate",
-    },
-    "suppliers": {
-        "table": "suppliers",
-        "id": "SupplierID",
-        "lead_time_days": "LeadTimeDays",
-        "status": "Status",
-    },
-    "employees": {
-        "table": "employees",
-        "id": "EmployeeID",
-        "role": "Role",
-        "status": "Status",
-    },
-    "lines": {
-        "table": "production_lines",
-        "id": "LineID",
-        "status": "Status",          # 'Free' | 'Cleaning' | 'Maintenance'
-    },
-    "medicines": {
-        "table": "medicines",
-        "id": "MedicineID",
-    },
-}
-
-#: Batch statuses that mean "this batch is committed to somebody".
-OPEN_ORDER_STATUSES = ("Open", "In Production", "Allocated", "Confirmed")
-#: Line statuses that block a new production order.
-BLOCKING_LINE_STATUSES = ("Cleaning", "Maintenance", "Hold", "Quarantine")
-
-
-def _q(entity: str, col: str) -> str:
-    return SCHEMA[entity][col]
-
-
-def _t(entity: str) -> str:
-    return SCHEMA[entity]["table"]
+DEFAULT_DB = "db/vellora.db"
 
 
 # --------------------------------------------------------------------------- #
@@ -130,8 +63,8 @@ class Check:
     detail: str
     weight: float = 1.0
     critical: bool = True
-    #: True when the check could not run (missing table/column) -- these are
-    #: excluded from the score rather than silently counted as passes, so a
+    #: True when the check could not run (missing table/column/context). These
+    #: are EXCLUDED from the score rather than counted as passes, so a
     #: half-wired environment can never masquerade as a grounded one.
     skipped: bool = False
 
@@ -150,33 +83,17 @@ class GroundedResult:
         if not scored:
             return 0.0
         total = sum(c.weight for c in scored)
-        got = sum(c.weight for c in scored if c.passed)
-        return got / total
+        return sum(c.weight for c in scored if c.passed) / total
 
     @property
     def success(self) -> bool:
         scored = self.scored
-        if not scored:
-            return False
-        return all(c.passed for c in scored if c.critical)
-
-    def feedback_text(self) -> str:
-        """Human-readable form, used in demo transcripts and the write gate."""
-        failed = [c for c in self.scored if not c.passed]
-        if not failed:
-            return "All grounded checks passed."
-        lines = ["Grounded validation FAILED:"]
-        lines += [f"  - [{c.name}] {c.detail}" for c in failed]
-        skipped = [c for c in self.checks if c.skipped]
-        if skipped:
-            lines.append(
-                "  (not evaluated: " + ", ".join(c.name for c in skipped) + ")"
-            )
-        return "\n".join(lines)
+        return bool(scored) and all(c.passed for c in scored if c.critical)
 
     def detail_lines(self) -> List[str]:
-        """EnvironmentFeedback.details is a list[str]; one line per failed
-        check so LATS reflections and Reflexion memories cite check NAMES."""
+        """EnvironmentFeedback.details is list[str]; one line per failed check,
+        naming the check, so LATS branch reflections and Reflexion episodic
+        memories cite a CONSTRAINT rather than a vibe."""
         failed = [c for c in self.scored if not c.passed]
         if not failed:
             return ["All grounded checks passed."]
@@ -186,17 +103,18 @@ class GroundedResult:
             out.append("not evaluated: " + ", ".join(skipped))
         return out
 
+    def feedback_text(self) -> str:
+        """Human-readable form for demo transcripts and the write gate."""
+        if self.success:
+            return "All grounded checks passed."
+        return "Grounded validation FAILED:\n" + "\n".join(
+            f"  - {line}" for line in self.detail_lines())
+
     def as_trace(self) -> List[Dict[str, Any]]:
-        """Extends the toolkit's JSON trace with `vellora_checks`."""
+        """Extends the toolkit's artifacts/ JSON trace with `vellora_checks`."""
         return [
-            {
-                "name": c.name,
-                "passed": c.passed,
-                "skipped": c.skipped,
-                "critical": c.critical,
-                "weight": c.weight,
-                "detail": c.detail,
-            }
+            {"name": c.name, "passed": c.passed, "skipped": c.skipped,
+             "critical": c.critical, "weight": c.weight, "detail": c.detail}
             for c in self.checks
         ]
 
@@ -208,8 +126,8 @@ class GroundedResult:
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
-def parse_candidate(text: str) -> Optional[RecoveryPlan]:
-    """Extract a RecoveryPlan from a model candidate. None if unparseable."""
+def parse_candidate(text: str) -> Optional[ContainmentPlan]:
+    """Extract a ContainmentPlan from a model candidate. None if unparseable."""
     if not text:
         return None
     m = _JSON_BLOCK.search(text)
@@ -239,48 +157,48 @@ def parse_candidate(text: str) -> Optional[RecoveryPlan]:
     if raw is None:
         return None
     try:
-        return RecoveryPlan.from_dict(json.loads(raw))
+        return ContainmentPlan.from_dict(json.loads(raw))
     except Exception:
         return None
 
 
 # --------------------------------------------------------------------------- #
-# The environment
+# The grounded environment
 # --------------------------------------------------------------------------- #
 
-class VelloraEnvironment:
+class VelloraEnvironment(Environment):
     """
     Grounded EnvironmentFeedback source for the Deviation Response Agent.
 
-    Satisfies the toolkit's environment protocol:  evaluate(task, candidate)
-    -> EnvironmentFeedback.  Drop it in wherever the toolkit constructs its
-    randomized `Environment`.
-
     Parameters
     ----------
-    db_path
-        Path to db/vellora.db. Opened read-only; this validator never writes.
-    context
-        The deviation context: failed batch id, implicated line, suspect
-        supplier lot, cleaning window. Produced by T1.
-    validate_payload
-        Optional callable wired to mcp_server/validation.py for a dry-run schema
-        check of the write payload. Left None -> `payload_schema` is SKIPPED,
-        never silently passed.
+    db_path       : path to db/vellora.db. Opened read-only; never writes.
+    failed_batch_id : the batch whose Quality_Test failed. Everything else
+                    (production order, supplier, medicine, location, window) is
+                    derived from the database, not supplied by the caller.
+    window_days   : how many days either side of the failed batch's
+                    ManufacturingDate count as the same material window.
+    use_mcp_validation : dry-run replacement order payloads through
+                    mcp_server.validation. Set False only in unit tests.
     """
 
     def __init__(
         self,
-        db_path: str,
-        context: Optional[Dict[str, Any]] = None,
-        validate_payload: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        db_path: str = DEFAULT_DB,
+        failed_batch_id: Optional[int] = None,
+        window_days: int = 14,
         success_threshold: float = 1.0,
+        use_mcp_validation: bool = True,
+        rng: random.Random | None = None,
     ) -> None:
+        super().__init__(success_threshold=min(max(success_threshold, 0.0), 1.0),
+                         rng=rng)
         self.db_path = db_path
-        self.context = context or {}
-        self.validate_payload = validate_payload
-        self.success_threshold = success_threshold
+        self.failed_batch_id = failed_batch_id
+        self.window_days = window_days
+        self.use_mcp_validation = use_mcp_validation
         self.last_result: Optional[GroundedResult] = None
+        self._ctx: Optional[Dict[str, Any]] = None
 
     # -- plumbing ----------------------------------------------------------- #
 
@@ -290,19 +208,43 @@ class VelloraEnvironment:
         return conn
 
     @staticmethod
-    def _rows(conn: sqlite3.Connection, sql: str, args: Sequence[Any] = ()) -> List[sqlite3.Row]:
+    def _rows(conn, sql: str, args: Sequence[Any] = ()) -> List[sqlite3.Row]:
         return list(conn.execute(sql, tuple(args)))
 
-    # -- the toolkit-facing entry point ------------------------------------- #
+    def context(self, conn) -> Dict[str, Any]:
+        """
+        Derive the deviation context from the failed batch. Cached per instance.
 
-    def evaluate(self, task: str = "", candidate: str = "", **_: Any) -> EnvironmentFeedback:
-        plan = parse_candidate(candidate)
+        Returns the implicated production order, supplier, medicine, location
+        and manufacturing date -- the anchors every check hangs off.
+        """
+        if self._ctx is not None:
+            return self._ctx
+        if self.failed_batch_id is None:
+            self._ctx = {}
+            return self._ctx
+        rows = self._rows(conn, """
+            SELECT b.BatchID, b.ProductionOrderID, b.MedicineID,
+                   b.ManufacturingDate, b.CurrentLocation, b.BatchStatus,
+                   o.SupplierID
+              FROM Manufacturing_Batch b
+              JOIN Production_Order o
+                ON o.ProductionOrderID = b.ProductionOrderID
+             WHERE b.BatchID = ?
+        """, (self.failed_batch_id,))
+        self._ctx = dict(rows[0]) if rows else {}
+        return self._ctx
+
+    # -- toolkit-facing entry point ----------------------------------------- #
+
+    def evaluate(self, state: str) -> EnvironmentFeedback:
+        """Signature matches Environment.evaluate(state) exactly."""
+        plan = parse_candidate(state)
         if plan is None:
             res = GroundedResult(checks=[Check(
                 "parse", False,
-                "Candidate contained no parseable JSON plan. Emit the plan in a "
-                "```json fenced block exactly as specified.",
-            )])
+                "candidate contained no parseable JSON plan; emit it in a "
+                "```json fenced block exactly as the contract specifies")])
             self.last_result = res
             return EnvironmentFeedback(success=False, score=0.0,
                                        details=res.detail_lines())
@@ -311,301 +253,340 @@ class VelloraEnvironment:
         self.last_result = res
         return EnvironmentFeedback(
             success=res.success and res.score >= self.success_threshold,
-            score=res.score,
+            score=round(res.score, 4),
             details=res.detail_lines(),
         )
 
     # -- the seven checks --------------------------------------------------- #
 
-    def validate_plan(self, plan: RecoveryPlan) -> GroundedResult:
+    def validate_plan(self, plan: ContainmentPlan) -> GroundedResult:
         res = GroundedResult()
         with self._connect() as conn:
+            ctx = self.context(conn)
             for fn in (
-                self._check_quarantine_completeness,
-                self._check_no_suspect_lot_reuse,
-                self._check_line_availability,
-                self._check_supplier_lead_time,
-                self._check_commitment_integrity,
-                self._check_approver_valid,
-                self._check_payload_schema,
+                self._check_impact_completeness,
+                self._check_no_implicated_supplier_reuse,
+                self._check_recall_eligibility,
+                self._check_no_duplicate_recall,
+                self._check_recall_authorizer,
+                self._check_order_owner,
+                self._check_payload_validation,
             ):
+                name = fn.__name__.replace("_check_", "")
                 try:
-                    res.checks.append(fn(conn, plan))
+                    res.checks.append(fn(conn, plan, ctx))
                 except sqlite3.Error as exc:
                     res.checks.append(Check(
-                        fn.__name__.replace("_check_", ""), False,
-                        f"schema mismatch, check could not run: {exc}",
-                        skipped=True,
-                    ))
+                        name, False, f"query failed: {exc}", skipped=True))
         return res
 
-    # 1 ---------------------------------------------------------------------- #
-    def _check_quarantine_completeness(self, conn, plan) -> Check:
+    # 1 --------------------------------------------------------------------- #
+    def _check_impact_completeness(self, conn, plan, ctx) -> Check:
         """
-        Set difference. Every batch on the implicated line inside the cleaning
-        window, PLUS every batch consuming the suspect supplier lot on ANY line,
-        must be quarantined. This is the check that catches under-scoping.
+        Set difference against the real impact cohorts. Sibling batches (same
+        ProductionOrderID) and same-supplier batches inside the manufacturing
+        window must all be contained or explicitly listed as WATCH. This is the
+        check that catches under-scoping.
         """
-        line_id = self.context.get("implicated_line_id")
-        lot = self.context.get("suspect_supplier_lot")
-        w_start = self.context.get("window_start")
-        w_end = self.context.get("window_end")
-        if line_id is None and lot is None:
-            return Check("quarantine_completeness", False,
-                         "no deviation context supplied", skipped=True)
+        if not ctx:
+            return Check("impact_completeness", False,
+                         "no failed batch context", skipped=True)
 
-        B, bid = _t("batches"), _q("batches", "id")
-        required: set[int] = set()
+        siblings = {r["BatchID"] for r in self._rows(conn, """
+            SELECT BatchID FROM Manufacturing_Batch
+             WHERE ProductionOrderID = ? AND BatchID != ?
+        """, (ctx["ProductionOrderID"], ctx["BatchID"]))}
 
-        if line_id is not None and w_start and w_end:
-            rows = self._rows(conn, f"""
-                SELECT {bid} FROM {B}
-                 WHERE {_q('batches','line_id')} = ?
-                   AND date({_q('batches','produced_on')}) BETWEEN date(?) AND date(?)
-            """, (line_id, w_start, w_end))
-            required |= {r[0] for r in rows}
+        same_supplier = {r["BatchID"] for r in self._rows(conn, """
+            SELECT b.BatchID
+              FROM Manufacturing_Batch b
+              JOIN Production_Order o
+                ON o.ProductionOrderID = b.ProductionOrderID
+             WHERE o.SupplierID = ?
+               AND b.BatchID != ?
+               AND ABS(julianday(b.ManufacturingDate) - julianday(?)) <= ?
+        """, (ctx["SupplierID"], ctx["BatchID"],
+              ctx["ManufacturingDate"], self.window_days))}
 
-        if lot:
-            rows = self._rows(conn, f"""
-                SELECT {bid} FROM {B} WHERE {_q('batches','supplier_lot')} = ?
-            """, (lot,))
-            required |= {r[0] for r in rows}
+        required = siblings | same_supplier | {ctx["BatchID"]}
+        accounted = set(plan.contained_batch_ids) | set(plan.watch_batch_ids)
+        missing = sorted(required - accounted)
 
-        missing = sorted(required - set(plan.quarantine_batch_ids))
         if missing:
-            return Check("quarantine_completeness", False,
-                         f"batches {missing} share the implicated line-window or "
-                         f"the suspect lot {lot!r} but are not quarantined")
-        return Check("quarantine_completeness", True,
-                     f"all {len(required)} implicated batches quarantined")
+            return Check(
+                "impact_completeness", False,
+                f"batches {missing} share the failed batch's production order "
+                f"or its supplier inside the {self.window_days}-day window but "
+                f"appear in neither the containment nor the watch list")
+        return Check("impact_completeness", True,
+                     f"all {len(required)} linked batches accounted for "
+                     f"({len(siblings)} sibling, {len(same_supplier)} supplier-linked)")
 
-    # 2 ---------------------------------------------------------------------- #
-    def _check_no_suspect_lot_reuse(self, conn, plan) -> Check:
+    # 2 --------------------------------------------------------------------- #
+    def _check_no_implicated_supplier_reuse(self, conn, plan, ctx) -> Check:
         """
-        THE TRAP CHECK. A recovery order that re-sources from the supplier lot
-        under investigation re-introduces the contamination it exists to route
-        around. Reads fine in prose; fails one join.
+        THE TRAP CHECK. A replacement order that re-sources from the supplier
+        whose material is implicated re-introduces the failure it exists to
+        route around. Reads perfectly well in prose; fails one join.
         """
-        lot = self.context.get("suspect_supplier_lot")
-        suspect_supplier = self.context.get("suspect_supplier_id")
-        if lot is None and suspect_supplier is None:
-            return Check("no_suspect_lot_reuse", False,
-                         "no suspect lot in context", skipped=True)
+        if not ctx:
+            return Check("no_implicated_supplier_reuse", False,
+                         "no failed batch context", skipped=True)
+        bad = [o for o in plan.replacement_orders
+               if o.supplier_id == ctx["SupplierID"]]
+        if bad:
+            names = self._rows(conn,
+                               "SELECT CompanyName FROM Supplier WHERE SupplierID = ?",
+                               (ctx["SupplierID"],))
+            who = names[0]["CompanyName"] if names else f"id {ctx['SupplierID']}"
+            return Check(
+                "no_implicated_supplier_reuse", False,
+                f"{len(bad)} replacement order(s) re-source from supplier "
+                f"{ctx['SupplierID']} ({who}) — the supplier of the material in "
+                f"the failed batch's production order {ctx['ProductionOrderID']}")
+        return Check("no_implicated_supplier_reuse", True,
+                     "no replacement order uses the implicated supplier")
 
-        offenders = []
-        for o in plan.orders:
-            if lot and o.supplier_lot == lot:
-                offenders.append(f"medicine {o.medicine_id} re-uses lot {lot}")
-            elif suspect_supplier is not None and o.supplier_id == suspect_supplier \
-                    and not o.supplier_lot:
-                offenders.append(
-                    f"medicine {o.medicine_id} orders from supplier "
-                    f"{o.supplier_id} without naming a lot, and that supplier "
-                    f"holds the suspect lot {lot}"
-                )
-        if offenders:
-            return Check("no_suspect_lot_reuse", False, "; ".join(offenders))
-        return Check("no_suspect_lot_reuse", True,
-                     "no recovery order sources the suspect lot")
-
-    # 3 ---------------------------------------------------------------------- #
-    def _check_line_availability(self, conn, plan) -> Check:
-        implicated = self.context.get("implicated_line_id")
-        L, lid = _t("lines"), _q("lines", "id")
-        problems = []
-        for o in plan.orders:
-            if o.line_id is None:
-                problems.append("an order has no line_id")
-                continue
-            if implicated is not None and o.line_id == implicated:
-                problems.append(f"line {o.line_id} is the contaminated line")
-                continue
-            rows = self._rows(
-                conn, f"SELECT {_q('lines','status')} FROM {L} WHERE {lid} = ?",
-                (o.line_id,))
-            if not rows:
-                problems.append(f"line {o.line_id} does not exist")
-                continue
-            status = str(rows[0][0])
-            if status in BLOCKING_LINE_STATUSES:
-                problems.append(f"line {o.line_id} is on {status} hold")
-                continue
-            if o.planned_start:
-                PO = _t("production_orders")
-                clash = self._rows(conn, f"""
-                    SELECT {_q('production_orders','id')} FROM {PO}
-                     WHERE {_q('production_orders','line_id')} = ?
-                       AND date(?) BETWEEN date({_q('production_orders','start')})
-                                       AND date({_q('production_orders','end')})
-                """, (o.line_id, o.planned_start))
-                if clash:
-                    problems.append(
-                        f"line {o.line_id} already runs order "
-                        f"{clash[0][0]} on {o.planned_start}")
-        if problems:
-            return Check("line_availability", False, "; ".join(problems))
-        return Check("line_availability", True, "all target lines free and clean")
-
-    # 4 ---------------------------------------------------------------------- #
-    def _check_supplier_lead_time(self, conn, plan) -> Check:
-        S = _t("suppliers")
-        problems = []
-        for o in plan.orders:
-            if o.supplier_id is None or not o.planned_start:
-                continue
-            rows = self._rows(conn, f"""
-                SELECT {_q('suppliers','lead_time_days')} FROM {S}
-                 WHERE {_q('suppliers','id')} = ?""", (o.supplier_id,))
-            if not rows:
-                problems.append(f"supplier {o.supplier_id} does not exist")
-                continue
-            lead = rows[0][0]
-            if lead is None:
-                continue
-            gap = self._rows(conn,
-                             "SELECT CAST(julianday(?) - julianday('now') AS INTEGER)",
-                             (o.planned_start,))[0][0]
-            if gap is not None and gap < int(lead):
-                problems.append(
-                    f"supplier {o.supplier_id} needs {lead}d lead time but "
-                    f"production starts in {gap}d")
-        if problems:
-            return Check("supplier_lead_time", False, "; ".join(problems))
-        return Check("supplier_lead_time", True, "lead times fit planned starts")
-
-    # 5 ---------------------------------------------------------------------- #
-    def _check_commitment_integrity(self, conn, plan) -> Check:
-        """A quarantined batch must not still be allocated to an open order."""
-        if not plan.quarantine_batch_ids:
-            return Check("commitment_integrity", True, "nothing quarantined")
-        B, PO = _t("batches"), _t("production_orders")
-        marks = ",".join("?" * len(plan.quarantine_batch_ids))
-        placeholders = ",".join("?" * len(OPEN_ORDER_STATUSES))
+    # 3 --------------------------------------------------------------------- #
+    def _check_recall_eligibility(self, conn, plan, ctx) -> Check:
+        """
+        Status decides the instrument. Only 'Distributed' batches have reached
+        customers and warrant a Product_Recall; internal batches take a
+        BatchStatus change. Getting this backwards is expensive in one
+        direction and negligent in the other.
+        """
+        ids = plan.contained_batch_ids
+        if not ids:
+            return Check("recall_eligibility", False, "plan contains nothing")
+        marks = ",".join("?" * len(ids))
         rows = self._rows(conn, f"""
-            SELECT b.{_q('batches','id')}, o.{_q('production_orders','id')}
-              FROM {B} b
-              JOIN {PO} o
-                ON o.{_q('production_orders','medicine_id')} = b.{_q('batches','medicine_id')}
-             WHERE b.{_q('batches','id')} IN ({marks})
-               AND o.{_q('production_orders','status')} IN ({placeholders})
-        """, (*plan.quarantine_batch_ids, *OPEN_ORDER_STATUSES))
-        if rows:
-            pairs = ", ".join(f"batch {r[0]}->order {r[1]}" for r in rows[:6])
-            return Check("commitment_integrity", False,
-                         f"quarantined batches still back open orders: {pairs}. "
-                         f"Each needs a replacement order or an explicit "
-                         f"customer-notification action.")
-        return Check("commitment_integrity", True,
-                     "no quarantined batch backs an open order")
+            SELECT BatchID, BatchStatus FROM Manufacturing_Batch
+             WHERE BatchID IN ({marks})
+        """, ids)
+        status = {r["BatchID"]: r["BatchStatus"] for r in rows}
 
-    # 6 ---------------------------------------------------------------------- #
-    def _check_approver_valid(self, conn, plan) -> Check:
-        E = _t("employees")
         problems = []
-        for o in plan.orders:
-            eid = o.qa_approver_employee_id
+        for bid in ids:
+            if bid not in status:
+                problems.append(f"batch {bid} does not exist")
+        for bid in plan.recall_batch_ids:
+            s = status.get(bid)
+            if s and s not in DISTRIBUTED_STATUSES:
+                problems.append(
+                    f"batch {bid} is '{s}', not Distributed — it needs a status "
+                    f"change to Rejected, not a Product_Recall")
+        for bid in plan.reject_batch_ids:
+            s = status.get(bid)
+            if s in DISTRIBUTED_STATUSES:
+                problems.append(
+                    f"batch {bid} is Distributed and has reached customers — "
+                    f"rejecting it internally does not contain it, it needs a "
+                    f"Product_Recall")
+            elif s and s not in INTERNAL_STATUSES:
+                problems.append(f"batch {bid} is already '{s}'")
+        if problems:
+            return Check("recall_eligibility", False, "; ".join(problems))
+        return Check("recall_eligibility", True,
+                     f"{len(plan.recall_batch_ids)} recall(s) and "
+                     f"{len(plan.reject_batch_ids)} rejection(s) match batch status")
+
+    # 4 --------------------------------------------------------------------- #
+    def _check_no_duplicate_recall(self, conn, plan, ctx) -> Check:
+        """Product_Recall.BatchID is UNIQUE — a second recall row is a hard
+        constraint violation, and the insert would fail at commit time."""
+        if not plan.recall_batch_ids:
+            return Check("no_duplicate_recall", True, "no recalls proposed")
+        marks = ",".join("?" * len(plan.recall_batch_ids))
+        rows = self._rows(conn, f"""
+            SELECT BatchID, RecallStatus FROM Product_Recall
+             WHERE BatchID IN ({marks})
+        """, plan.recall_batch_ids)
+        if rows:
+            pairs = ", ".join(f"batch {r['BatchID']} ({r['RecallStatus']})"
+                              for r in rows)
+            return Check("no_duplicate_recall", False,
+                         f"already recalled: {pairs}. Product_Recall.BatchID is "
+                         f"UNIQUE, so these inserts would be rejected")
+        return Check("no_duplicate_recall", True, "no existing recall rows")
+
+    # 5 --------------------------------------------------------------------- #
+    def _check_recall_authorizer(self, conn, plan, ctx) -> Check:
+        """
+        Only a 'QA Manager' may authorize. 'QA Staff' is a different role in the
+        schema's CHECK constraint, and models pick it constantly because the
+        titles read alike.
+        """
+        if not plan.recall_batch_ids:
+            return Check("recall_authorizer", True, "no recalls to authorize")
+        eid = plan.recall_authorizer_employee_id
+        if eid is None:
+            return Check("recall_authorizer", False,
+                         "recalls proposed with no authorizing employee")
+        rows = self._rows(conn, """
+            SELECT FullName, Role, AccountStatus FROM Employee
+             WHERE EmployeeID = ?
+        """, (eid,))
+        if not rows:
+            return Check("recall_authorizer", False,
+                         f"employee {eid} does not exist")
+        r = rows[0]
+        if r["Role"] not in RECALL_AUTHORIZER_ROLES:
+            return Check("recall_authorizer", False,
+                         f"employee {eid} ({r['FullName']}) has Role "
+                         f"'{r['Role']}'; only {RECALL_AUTHORIZER_ROLES[0]} may "
+                         f"authorize a Product_Recall")
+        if r["AccountStatus"] != "Active":
+            return Check("recall_authorizer", False,
+                         f"employee {eid} ({r['FullName']}) is "
+                         f"{r['AccountStatus']}, not Active")
+        return Check("recall_authorizer", True,
+                     f"{r['FullName']} is an Active QA Manager")
+
+    # 6 --------------------------------------------------------------------- #
+    def _check_order_owner(self, conn, plan, ctx) -> Check:
+        """Production_Order.ResponsibleEmployeeID is NOT NULL and must point at
+        a real, active employee who can actually own production."""
+        if not plan.replacement_orders:
+            return Check("order_owner", True, "no replacement orders")
+        problems = []
+        for o in plan.replacement_orders:
+            eid = o.responsible_employee_id
             if eid is None:
-                problems.append("an order has no QA approver")
+                problems.append(
+                    f"order for medicine {o.medicine_id} has no responsible "
+                    f"employee (column is NOT NULL)")
                 continue
-            rows = self._rows(conn, f"""
-                SELECT {_q('employees','role')}, {_q('employees','status')}
-                  FROM {E} WHERE {_q('employees','id')} = ?""", (eid,))
+            rows = self._rows(conn, """
+                SELECT FullName, Role, AccountStatus FROM Employee
+                 WHERE EmployeeID = ?""", (eid,))
             if not rows:
                 problems.append(f"employee {eid} does not exist")
                 continue
-            role, status = str(rows[0][0] or ""), str(rows[0][1] or "")
-            if "QA" not in role.upper():
-                problems.append(f"employee {eid} role {role!r} is not QA")
-            if status.lower() != "active":
-                problems.append(f"employee {eid} is {status}, not Active")
+            r = rows[0]
+            if r["AccountStatus"] != "Active":
+                problems.append(f"employee {eid} is {r['AccountStatus']}")
+            if r["Role"] not in ORDER_OWNER_ROLES:
+                problems.append(
+                    f"employee {eid} is {r['Role']}; production orders need "
+                    f"{' or '.join(ORDER_OWNER_ROLES)}")
         if problems:
-            return Check("approver_valid", False, "; ".join(problems))
-        return Check("approver_valid", True, "all approvers are active QA staff")
+            return Check("order_owner", False, "; ".join(problems))
+        return Check("order_owner", True, "all order owners active and eligible")
 
-    # 7 ---------------------------------------------------------------------- #
-    def _check_payload_schema(self, conn, plan) -> Check:
-        """Dry-run the write payload through the real MCP validation layer."""
-        if self.validate_payload is None:
-            return Check("payload_schema", False,
-                         "mcp_server.validation not wired in", skipped=True)
+    # 7 --------------------------------------------------------------------- #
+    def _check_payload_validation(self, conn, plan, ctx) -> Check:
+        """
+        Dry run through the REAL mcp_server.validation helpers — the same
+        functions the write path uses. No rows are written.
+        """
+        if not plan.replacement_orders:
+            return Check("payload_validation", True, "no payloads to validate")
+        if not self.use_mcp_validation:
+            return Check("payload_validation", False,
+                         "mcp validation disabled", skipped=True)
+        try:
+            from mcp_server.validation import (
+                validate_exists, validate_positive_integer)
+        except Exception as exc:
+            return Check("payload_validation", False,
+                         f"could not import mcp_server.validation: {exc}",
+                         skipped=True)
+
         problems = []
-        for o in plan.orders:
-            payload = {
-                "medicine_id": o.medicine_id,
-                "line_id": o.line_id,
-                "quantity": o.quantity,
-                "supplier_id": o.supplier_id,
-                "start_date": o.planned_start,
-            }
+        for o in plan.replacement_orders:
             try:
-                self.validate_payload(payload)
+                validate_positive_integer(o.planned_quantity, "PlannedQuantity")
+                validate_exists("Medicine", "MedicineID", o.medicine_id)
+                validate_exists("Supplier", "SupplierID", o.supplier_id)
+                validate_exists("Employee", "EmployeeID",
+                                o.responsible_employee_id)
             except Exception as exc:
-                problems.append(f"{payload} rejected: {exc}")
+                problems.append(f"{o.as_payload()} rejected: {exc}")
         if problems:
-            return Check("payload_schema", False, "; ".join(problems))
-        return Check("payload_schema", True, "all payloads validate")
+            return Check("payload_validation", False, "; ".join(problems))
+        return Check("payload_validation", True,
+                     f"{len(plan.replacement_orders)} payload(s) validate")
 
 
 # --------------------------------------------------------------------------- #
-# Ungrounded baseline -- kept ONLY so the comparison table has a fair control.
+# Ungrounded control — for the required comparison row only
 # --------------------------------------------------------------------------- #
 
-class UngroundedBaselineEnvironment:
+class UngroundedBaselineEnvironment(Environment):
     """
-    The toolkit's randomized evaluator, re-exported under an honest name.
+    The toolkit's stock randomized evaluator under an honest name.
 
-    Present so `planning_eval` can run the required
-    "LATS ungrounded vs LATS grounded" contrast. It must never be the
-    environment the shipped agent uses.
+    Exists so planning_eval can run the mandatory "LATS ungrounded vs LATS
+    grounded" contrast. It must never be what the shipped agent uses.
     """
 
-    def __init__(self, seed: int = 0, success_threshold: float = 0.7) -> None:
-        import random
-        self._rng = random.Random(seed)
-        self.success_threshold = success_threshold
-
-    def evaluate(self, task: str = "", candidate: str = "", **_: Any) -> EnvironmentFeedback:
-        score = self._rng.betavariate(6, 3)
-        return EnvironmentFeedback(
-            success=score >= self.success_threshold,
-            score=score,
-            details=["Randomized evaluator; no connection to the database."],
-        )
-
 
 # --------------------------------------------------------------------------- #
-# Introspection: tells you exactly which SCHEMA entries are wrong
+# Introspection
 # --------------------------------------------------------------------------- #
+
+EXPECTED = {
+    "Employee": ["EmployeeID", "FullName", "Role", "AccountStatus"],
+    "Medicine": ["MedicineID"],
+    "Supplier": ["SupplierID", "CompanyName"],
+    "Production_Order": ["ProductionOrderID", "MedicineID", "SupplierID",
+                         "PlannedQuantity", "ProductionStatus",
+                         "ResponsibleEmployeeID"],
+    "Manufacturing_Batch": ["BatchID", "ProductionOrderID", "MedicineID",
+                            "ManufacturingDate", "ExpiryDate", "BatchStatus",
+                            "CurrentLocation"],
+    "Quality_Test": ["TestID", "BatchID", "TestResult", "TestDate"],
+    "Product_Recall": ["RecallID", "BatchID", "RecallStatus",
+                       "AuthorizedManagerID"],
+}
+
 
 def introspect(db_path: str) -> int:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     bad = 0
-    for entity, m in SCHEMA.items():
-        t = m["table"]
+    for t, cols in EXPECTED.items():
         if t not in tables:
-            print(f"  MISSING TABLE  {entity:18s} -> {t!r}")
-            print(f"                 candidates: {sorted(tables)}")
+            print(f"  MISSING TABLE  {t}")
             bad += 1
             continue
-        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({t})")}
-        for logical, col in m.items():
-            if logical == "table":
-                continue
-            if col not in cols:
-                print(f"  MISSING COLUMN {entity}.{logical:14s} -> {col!r}")
-                print(f"                 available: {sorted(cols)}")
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({t})")}
+        for c in cols:
+            if c not in have:
+                print(f"  MISSING COLUMN {t}.{c}   have: {sorted(have)}")
                 bad += 1
-    print("\nSchema map is correct." if not bad
-          else f"\n{bad} mapping(s) need fixing in SCHEMA.")
-    return bad
+    print()
+    if bad:
+        print(f"{bad} mismatch(es) — the grounded checks cannot run correctly.")
+        return bad
+
+    print("Schema matches. Candidate failed batches (most recent QA failures):")
+    for r in conn.execute("""
+        SELECT q.BatchID, q.TestType, q.TestDate, b.BatchStatus,
+               b.ProductionOrderID, o.SupplierID
+          FROM Quality_Test q
+          JOIN Manufacturing_Batch b ON b.BatchID = q.BatchID
+          JOIN Production_Order o ON o.ProductionOrderID = b.ProductionOrderID
+         WHERE q.TestResult = 'Fail'
+         ORDER BY q.TestDate DESC LIMIT 10
+    """):
+        print(f"  BatchID={r[0]:<6} {r[1]:<22} {r[2]}  status={r[3]:<14} "
+              f"order={r[4]} supplier={r[5]}")
+
+    print("\nActive QA Managers (valid recall authorizers):")
+    for r in conn.execute("""
+        SELECT EmployeeID, FullName FROM Employee
+         WHERE Role = 'QA Manager' AND AccountStatus = 'Active'
+    """):
+        print(f"  EmployeeID={r[0]:<5} {r[1]}")
+    return 0
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--introspect", action="store_true")
-    p.add_argument("--db", default="db/vellora.db")
+    p.add_argument("--db", default=DEFAULT_DB)
     a = p.parse_args()
     if a.introspect:
         raise SystemExit(1 if introspect(a.db) else 0)
