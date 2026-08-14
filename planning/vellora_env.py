@@ -126,10 +126,62 @@ class GroundedResult:
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
+def _repair_truncated_json(raw: str) -> Optional[str]:
+    """
+    Close a JSON object that was cut off by a token limit.
+
+    Models routinely hit max_tokens mid-object. Scoring such a candidate 0.0
+    conflates a FORMATTING accident with a PLANNING error, which corrupts the
+    comparison table: methods that generate longer plans get penalised for
+    verbosity rather than judged on correctness. Repair is safe because we only
+    ever ADD closers -- no value is invented.
+
+    Returns None when the fragment is too short to be meaningful.
+    """
+    stack: list[str] = []
+    in_str = esc = False
+    for ch in raw:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]" and stack:
+            stack.pop()
+
+    if not stack and not in_str:
+        return None                      # nothing to repair
+
+    fixed = raw
+    if in_str:
+        fixed += '"'
+    # Drop a dangling key or comma that would make the close invalid,
+    # e.g. '..., "rationale":' or '..., '
+    fixed = re.sub(r',\s*"[^"]*"\s*:\s*$', "", fixed)
+    fixed = re.sub(r',\s*$', "", fixed)
+    fixed = re.sub(r'"\s*:\s*$', '": null', fixed)
+    return fixed + "".join(reversed(stack))
+
+
 def parse_candidate(text: str) -> Optional[ContainmentPlan]:
     """Extract a ContainmentPlan from a model candidate. None if unparseable."""
+    plan, _ = parse_candidate_verbose(text)
+    return plan
+
+
+def parse_candidate_verbose(text: str) -> tuple[Optional[ContainmentPlan], bool]:
+    """As parse_candidate, plus whether truncation repair was needed. The flag
+    is recorded in the trace so a reader can tell repaired runs from clean
+    ones rather than taking the score on trust."""
     if not text:
-        return None
+        return None, False
     m = _JSON_BLOCK.search(text)
     raw = m.group(1) if m else None
     if raw is None:
@@ -154,12 +206,21 @@ def parse_candidate(text: str) -> Optional[ContainmentPlan]:
                 if depth == 0 and start is not None:
                     raw = text[start:i + 1]
                     break
+        if raw is None and start is not None:
+            raw = text[start:]           # unterminated: repair below
     if raw is None:
-        return None
+        return None, False
     try:
-        return ContainmentPlan.from_dict(json.loads(raw))
+        return ContainmentPlan.from_dict(json.loads(raw)), False
     except Exception:
-        return None
+        pass
+    repaired = _repair_truncated_json(raw)
+    if repaired:
+        try:
+            return ContainmentPlan.from_dict(json.loads(repaired)), True
+        except Exception:
+            pass
+    return None, False
 
 
 # --------------------------------------------------------------------------- #
@@ -239,7 +300,7 @@ class VelloraEnvironment(Environment):
 
     def evaluate(self, state: str) -> EnvironmentFeedback:
         """Signature matches Environment.evaluate(state) exactly."""
-        plan = parse_candidate(state)
+        plan, repaired = parse_candidate_verbose(state)
         if plan is None:
             res = GroundedResult(checks=[Check(
                 "parse", False,
@@ -250,6 +311,15 @@ class VelloraEnvironment(Environment):
                                        details=res.detail_lines())
 
         res = self.validate_plan(plan)
+        if repaired:
+            # Informational, not a failure: the plan was truncated by a token
+            # limit and closed programmatically. Visible in the trace so
+            # repaired runs are distinguishable from clean ones.
+            res.checks.append(Check(
+                "json_repaired", True,
+                "candidate was truncated mid-object and closed programmatically;"
+                " no values were invented",
+                critical=False, weight=0.0))
         self.last_result = res
         return EnvironmentFeedback(
             success=res.success and res.score >= self.success_threshold,

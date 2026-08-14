@@ -101,6 +101,10 @@ __all__ = [
 #: Override per run without editing code: VELLORA_MODEL / VELLORA_CRITIC_MODEL.
 DEFAULT_MODEL = os.getenv("VELLORA_MODEL", "mistral-large-latest")
 CRITIC_MODEL = os.getenv("VELLORA_CRITIC_MODEL", "mistral-small-latest")
+#: A containment plan runs ~400 tokens; notices run longer. Too low a ceiling
+#: truncates candidates mid-JSON, which the environment then scores 0.0 -- a
+#: formatting accident recorded as a planning failure.
+MAX_TOKENS = int(os.getenv("VELLORA_MAX_TOKENS", "4096"))
 
 
 def build_model(model_name: Optional[str] = None, temperature: float = 0.2,
@@ -110,6 +114,7 @@ def build_model(model_name: Optional[str] = None, temperature: float = 0.2,
     return ChatMistralAI(
         model=model_name or DEFAULT_MODEL,
         temperature=temperature,
+        max_tokens=MAX_TOKENS,
         callbacks=callbacks or [],
     )
     # --- ADAPT END ---
