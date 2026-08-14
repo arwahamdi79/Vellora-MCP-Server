@@ -3,13 +3,15 @@
 
 | Method | Task success | Mean grounded score | Avg LLM calls | Avg tokens | Avg latency (s) | Est. cost/run |
 |---|---|---|---|---|---|---|
-| dynamic | 0/1  (3 errored, excluded) | 0.0 | 18 | 55523 | 42.2 | $0.01351 |
-| static | 0/2  (2 errored, excluded) | 0.0 | 22 | 68820 | 114.1 | $0.01781 |
+| dynamic | 3/8  (4 errored, excluded) | 0.703 | 13 | 32942 | 774.7 | $0.00829 |
+| static | 4/9  (3 errored, excluded) | 0.736 | 18.7 | 54268 | 81.8 | $0.01448 |
 
-Cases covered (4): DEC-DYNAMIC-01, DEC-DYNAMIC-02, DEC-DYNAMIC-03, DEC-DYNAMIC-04
+Cases covered (8): DEC-DYNAMIC-01, DEC-DYNAMIC-02, DEC-DYNAMIC-03, DEC-DYNAMIC-04, DEC-STATIC-01, DEC-STATIC-02, DEC-STATIC-03, DEC-STATIC-04
 Model(s): mistral-small-latest
 
-**5 run(s) aborted on provider errors and are excluded from the averages above.** Re-run with `--retry-errors` before citing this table:
+**7 run(s) aborted on provider errors and are excluded from the averages above.** Re-run with `--retry-errors` before citing this table:
+  - DEC-DYNAMIC-01 [dynamic]: HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completi
+  - DEC-DYNAMIC-01 [static]: HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completi
   - DEC-DYNAMIC-02 [dynamic]: HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completi
   - DEC-DYNAMIC-03 [dynamic]: HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completi
   - DEC-DYNAMIC-03 [static]: HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completi
@@ -21,12 +23,12 @@ Model(s): mistral-small-latest
 
 | Method | Task success | Mean grounded score | Avg LLM calls | Avg tokens | Avg latency (s) | Est. cost/run |
 |---|---|---|---|---|---|---|
-| lats_grounded | 2/4 | 0.719 | 7.8 | 13447 | 21.2 | $0.00384 |
-| lats_ungrounded | 0/4 | 0.406 | 3 | 4718 | 10.0 | $0.00143 |
-| plan_and_solve | 0/4 | 0.75 | 1 | 1749 | 5.5 | $0.00063 |
-| tree_of_thoughts | 0/4 | 0.875 | 8.8 | 13773 | 48.7 | $0.00387 |
+| lats_grounded | 2/14 | 0.393 | 9.4 | 15504 | 25.8 | $0.00445 |
+| lats_ungrounded | 0/14 | 0.232 | 2.4 | 3627 | 6.7 | $0.00108 |
+| plan_and_solve | 0/14 | 0.589 | 1 | 1741 | 4.9 | $0.00063 |
+| tree_of_thoughts | 1/14 | 0.866 | 8.9 | 13595 | 28.5 | $0.00379 |
 
-Cases covered (4): GRD-01, PLN-LOOKAHEAD-02, PLN-LOOKAHEAD-03, PLN-LOOKAHEAD-04
+Cases covered (10): GRD-01, GRD-02, GRD-03, GRD-04, PLN-LOOKAHEAD-02, PLN-LOOKAHEAD-03, PLN-LOOKAHEAD-04, RFX-01, RFX-02, RFX-03
 Model(s): mistral-small-latest
 
 
@@ -44,7 +46,7 @@ Model(s): mistral-small-latest
 
 ### Grounded vs ungrounded LATS
 
-Grounded  : 2/4 success, mean score 0.719, 7.8 calls
-Ungrounded: 0/4 success, mean score 0.406, 3 calls
+Grounded  : 2/14 success, mean score 0.393, 9.4 calls
+Ungrounded: 0/14 success, mean score 0.232, 2.4 calls
 
 Both rows are scored by the SAME grounded environment; only the signal guiding the search differs.
