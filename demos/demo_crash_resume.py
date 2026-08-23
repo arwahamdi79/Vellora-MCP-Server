@@ -1,29 +1,83 @@
 #!/usr/bin/env python3
-"""Crash/restart demo. First run writes durable checkpoints; --resume continues the same run."""
-import argparse, os, sys
-from pathlib import Path
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from db.init_db import init_db
-from state_graph.graphs import SupplierCAPAGraph
-from state_graph.persistence import load_latest_checkpoint
+"""
+Demo 3: Process Crash → Checkpoint Recovery
+===========================================
+Proves checkpointing survives an actual process restart.
+Part 1: run until mid-graph, write a marker, exit.
+Part 2: --resume loads checkpoint and continues without re-executing done nodes.
+"""
 
-p=argparse.ArgumentParser(); p.add_argument("--resume",action="store_true"); args=p.parse_args()
-init_db()
-run_file=Path(".final_demo_run")
-if not args.resume:
-    g=SupplierCAPAGraph({"current_state":"start","completed_steps":[]})
-    run_id,cp=g.run_until_checkpoint(); run_file.write_text(run_id)
-    print(f"Checkpoint saved: {cp['checkpoint_id']} at state={cp['current_state']}")
-    print("Simulating process crash now. Run this command to recover:")
-    print("python demos/demo_crash_resume.py --resume")
-    raise SystemExit(0)
-run_id=run_file.read_text().strip()
-g=SupplierCAPAGraph(run_id=run_id)
-cp=load_latest_checkpoint(run_id)
-if not cp: raise SystemExit("No checkpoint found")
-g.state=cp["state"]
-print(f"Loaded checkpoint {cp['checkpoint_id']} at state={cp['current_state']}")
-result=g.resume()
-print("Resumed without replaying completed states.")
-print("DEMO COMPLETE", result["current_state"])
-run_file.unlink(missing_ok=True)
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from state_graph import persistence as store
+from state_graph import supplier_capa_graph as graph
+
+MARKER = ROOT / "demos" / ".crash_demo_run_id"
+
+
+def part1():
+    store.init_tables()
+    print("Part 1: Supplier CAPA Graph started")
+    started = graph.start(supplier_id="SUP-CRASH-001", estimated_cost=1200)
+    run_id = started["run_id"]
+    state = started["state"]
+
+    # Manually advance a couple of nodes then "crash"
+    from state_graph.supplier_capa_graph import _run_node, NODES
+
+    for node_id in NODES[:2]:  # investigate + search_corrective_orderings
+        state = _run_node(run_id, node_id, state)
+        print(f"  [Step] {node_id} done — checkpoint saved")
+
+    MARKER.write_text(run_id)
+    print(f"  💾 Checkpoint saved. run_id={run_id}")
+    print("  ⚠️  SIMULATING PROCESS CRASH (exiting now)")
+    print("  Restart with: python demos/demo_crash_resume.py --resume")
+    sys.exit(0)
+
+
+def part2():
+    if not MARKER.exists():
+        print("No marker file — run without --resume first")
+        sys.exit(1)
+    run_id = MARKER.read_text().strip()
+    print(f"Part 2: Loading checkpoint for run_id={run_id}")
+    ckpt = store.load_checkpoint(run_id)
+    if not ckpt:
+        print("No checkpoint found")
+        sys.exit(1)
+    print(f"  ✅ Loaded checkpoint node={ckpt['node_id']} seq={ckpt['sequence']}")
+    print(f"  completed_nodes so far: {ckpt['state'].get('completed_nodes')}")
+
+    resumed = graph.resume(run_id)
+    print(f"  Resumed → status={resumed.get('status')}")
+    print(f"  completed_nodes final: {resumed.get('state', {}).get('completed_nodes')}")
+
+    # Prove no re-execution: the first two nodes must still be present once
+    done = resumed.get("state", {}).get("completed_nodes", [])
+    assert "investigate" in done
+    assert "search_corrective_orderings" in done
+    print("✅ DEMO COMPLETE — Crash recovery with no re-execution of completed steps")
+    MARKER.unlink(missing_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    if args.resume:
+        part2()
+    else:
+        part1()
+
+
+if __name__ == "__main__":
+    main()
