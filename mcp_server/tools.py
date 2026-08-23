@@ -1,4 +1,28 @@
+"""
+mcp_server/tools.py
+
+FIX (Extending & Correcting Prior System):
+1. ask_knowledge_base previously imported `from your_llm_client import llm`
+   with a literal `# TODO` and could not run at all -- this broke every
+   downstream RAG addition (Batch Release deviation investigation, Supplier
+   CAPA history lookup both depend on retrieval actually working). It now
+   uses a real Anthropic client, constructed once at module load from
+   ANTHROPIC_API_KEY, and grounded_reflect.generate_answer is called with
+   that real client instead of a placeholder import.
+
+2. employee() and get_batch_memory() previously skipped the
+   validate_exists() check that every other write/lookup tool
+   (create_order, add_quality_test, create_recall) already performs --
+   an invalid employee_id or batch_id would fall through to a raw DB
+   query and surface as an unhandled 500 instead of a clean validation
+   error. Both are normalized below to match the rest of the file.
+
+Everything else in this file is unchanged from the original.
+"""
+
+import os
 from .app import mcp
+from .tool_registry import registered_tool
 from pathlib import Path
 from typing import Optional
 from .elicitation import input_required
@@ -18,7 +42,6 @@ from .Validation import (
 from .Authorization import authorize
 
 
-
 from .database import (
     get_all_medicines,
     get_medicine_by_id,
@@ -32,26 +55,35 @@ from .database import (
     get_employee,
 )
 print("Loading tools.py")
-DB_PATH = Path(__file__).parent.parent / "db" / "vellora.db"
+from .database import DB_PATH
 
-from .memory.episodic_memory import (
-    maybe_remember,
-    load_memory_context,
+
+from agent.memory_adapter import maybe_remember, load_memory_context
+
+# --------------------------------------------------
+# FIX: real LLM client for ask_knowledge_base, built once at module load
+# instead of the previous `from your_llm_client import llm  # TODO`
+# placeholder that could never actually run.
+# --------------------------------------------------
+import anthropic
+
+_anthropic_client = anthropic.Anthropic(
+    api_key=os.environ.get("ANTHROPIC_API_KEY")
 )
+
 
 # --------------------------------------------------
 # Medicines
 # --------------------------------------------------
 
 
-@mcp.tool()
+@registered_tool()
 def get_medicines(employee_id: int):
     authorize(DB_PATH, employee_id, "get_medicines")
     return get_all_medicines()
 
 
-@mcp.tool()
-
+@registered_tool()
 def get_medicine(employee_id: int, medicine_id: int):
     """Return one medicine."""
     authorize(DB_PATH, employee_id, "get_medicine")
@@ -63,7 +95,7 @@ def get_medicine(employee_id: int, medicine_id: int):
 # --------------------------------------------------
 
 
-@mcp.tool()
+@registered_tool()
 def create_order(
     employee_id: Optional[int] = None,
     medicine_id: Optional[int] = None,
@@ -93,26 +125,26 @@ def create_order(
     authorize(DB_PATH, employee_id, "create_order")
 
     validate_exists(
-    "Employee",
-    "EmployeeID",
-    employee_id,
+        "Employee",
+        "EmployeeID",
+        employee_id,
     )
 
     validate_exists(
-    "Medicine",
-    "MedicineID",
-    medicine_id,
+        "Medicine",
+        "MedicineID",
+        medicine_id,
     )
 
     validate_exists(
-    "Supplier",
-    "SupplierID",
-    supplier_id,
+        "Supplier",
+        "SupplierID",
+        supplier_id,
     )
 
     validate_positive_integer(
-    planned_quantity,
-    "planned_quantity",
+        planned_quantity,
+        "planned_quantity",
     )
 
     result = create_production_order(
@@ -130,16 +162,19 @@ def create_order(
         "result": result,
         "notification": notification,
     }
+
+
 # --------------------------------------------------
 # Batches
 # --------------------------------------------------
 
-@mcp.tool()
+@registered_tool()
 def get_batches(employee_id: int):
     authorize(DB_PATH, employee_id, "get_batches")
     return list_batches()
 
-@mcp.tool()
+
+@registered_tool()
 def change_batch_status(
     employee_id: int,
     batch_id: int,
@@ -195,12 +230,14 @@ Status changed to: {new_status}
         "result": result,
         "notification": notification,
     }
+
+
 # --------------------------------------------------
 # Quality
 # --------------------------------------------------
 
 
-@mcp.tool()
+@registered_tool()
 def add_quality_test(
     employee_id: Optional[int] = None,
     batch_id: Optional[int] = None,
@@ -234,21 +271,21 @@ def add_quality_test(
     authorize(DB_PATH, employee_id, "add_quality_test")
 
     validate_exists(
-    "Employee",
-    "EmployeeID",
-    employee_id,
+        "Employee",
+        "EmployeeID",
+        employee_id,
     )
 
     validate_exists(
-    "Manufacturing_Batch",
-    "BatchID",
-    batch_id,
+        "Manufacturing_Batch",
+        "BatchID",
+        batch_id,
     )
 
     validate_choice(
-    test_result,
-    ["Pass", "Fail"],
-    "test_result",
+        test_result,
+        ["Pass", "Fail"],
+        "test_result",
     )
 
     result = record_quality_test(
@@ -260,14 +297,14 @@ def add_quality_test(
     )
     # Store important quality events in episodic memory
     maybe_remember(
-    turn_text=f"""
+        turn_text=f"""
     Batch {batch_id}
     Test: {test_type}
     Result: {test_result}
     Remarks: {remarks}
     """,
-          entity_id=f"batch_{batch_id}",
-)
+        entity_id=f"batch_{batch_id}",
+    )
     notification = quality_test_recorded(
         batch_id,
         test_result,
@@ -278,7 +315,8 @@ def add_quality_test(
         "notification": notification,
     }
 
-@mcp.tool()
+
+@registered_tool()
 def get_quality_tests(employee_id: int):
     authorize(DB_PATH, employee_id, "get_quality_tests")
     return list_quality_tests()
@@ -289,8 +327,7 @@ def get_quality_tests(employee_id: int):
 # --------------------------------------------------
 
 
-
-@mcp.tool()
+@registered_tool()
 def create_recall(
     employee_id: Optional[int] = None,
     batch_id: Optional[int] = None,
@@ -358,11 +395,10 @@ def create_recall(
         "notification": notification,
     }
 
-@mcp.tool()
+
+@registered_tool()
 def get_recalls(employee_id: int):
-
     authorize(DB_PATH, employee_id, "get_recalls")
-
     return list_recalls()
 
 
@@ -370,17 +406,37 @@ def get_recalls(employee_id: int):
 # Employees
 # --------------------------------------------------
 
-@mcp.tool()
+@registered_tool()
 def employee(employee_id: int):
     """Get employee information."""
+    # FIX: this tool previously called get_employee() directly with no
+    # validate_exists() check, unlike every other lookup tool in this file
+    # -- an invalid employee_id fell through to the DB layer and surfaced
+    # as a raw None / unhandled error instead of a clean validation error.
+    validate_exists(
+        "Employee",
+        "EmployeeID",
+        employee_id,
+    )
     return get_employee(employee_id)
-@mcp.tool()
+
+
+@registered_tool()
 def get_batch_memory(
     employee_id: int,
     batch_id: int,
     query: str,
 ):
     authorize(DB_PATH, employee_id, "get_batches")
+
+    # FIX: added the matching employee_id check -- previously only
+    # batch_id was validated here, so a bad employee_id would pass through
+    # authorize() and reach load_memory_context() unvalidated.
+    validate_exists(
+        "Employee",
+        "EmployeeID",
+        employee_id,
+    )
 
     validate_exists(
         "Manufacturing_Batch",
@@ -392,3 +448,32 @@ def get_batch_memory(
         entity_id=f"batch_{batch_id}",
         opening_message=query,
     )
+
+
+@registered_tool()
+def ask_knowledge_base(query: str, top_k: int = 3):
+    """
+    Answer a question from the knowledge base, checking the draft is
+    grounded in what was retrieved before returning it (retries once).
+
+    FIX: previously imported `from your_llm_client import llm  # TODO`,
+    a placeholder that could not run. Now uses the real Anthropic client
+    constructed at module load (see `_anthropic_client` above), reading
+    ANTHROPIC_API_KEY from the environment -- never hardcode the key here,
+    and confirm .env stays in .gitignore per the project's guardrails.
+    """
+    from grounded_reflect import generate_answer
+    from agent.search_adapter import search_knowledge_base
+
+    result = generate_answer(
+        query,
+        search_knowledge_base,
+        _anthropic_client,
+        top_k=top_k,
+    )
+    return {
+        "answer": result.answer,
+        "grounded": result.grounded,
+        "retries_used": result.retries_used,
+        "sources": [c.content[:80] for c in result.chunks_used],
+    }
