@@ -1,0 +1,302 @@
+{
+  "timestamp": "2026-08-14T16:49:41.907009+00:00",
+  "case_id": "DEC-DYNAMIC-03",
+  "mode": "static",
+  "goal": "Batch 21 failed QA. Contain it and raise replacement production so we don't run short on Ibuprex 400.",
+  "plan_task_ids": [
+    "t1_trace",
+    "t2_scope",
+    "t3_action",
+    "t4_supply",
+    "t5_plan",
+    "t6_notice",
+    "t7_commit"
+  ],
+  "execution_batches": [
+    [
+      "t1_trace"
+    ],
+    [
+      "t2_scope"
+    ],
+    [
+      "t3_action"
+    ],
+    [
+      "t4_supply"
+    ],
+    [
+      "t5_plan"
+    ],
+    [
+      "t6_notice"
+    ],
+    [
+      "t7_commit"
+    ]
+  ],
+  "dynamic_steps": [],
+  "nodes": [
+    {
+      "id": "t1_trace",
+      "title": "trace_impact",
+      "subtask_type": "deterministic_lookup",
+      "planner": "direct_tool_call",
+      "output": "FAILED BATCH\n    batch 21: Ibuprex 400, status=Distributed, made 2026-07-25\n    production order 17, supplier 1 (PharmaRaw Egypt)\n    failed test: Sterility Test on 2026-08-10\n    remarks: Microbial growth observed in two of six settle plates. Excursion traced to the raw material intake for this production order.\n\nSIBLING COHORT (same production order \u2014 same physical run)\n    batch 22: Ibuprex 400, status=Approved, made 2026-07-26, at Warehouse A - Cairo\n\nSUPPLIER COHORT (same supplier, within the manufacturing window)\n    batch 23: Loratadex, status=Distributed, made 2026-07-28, at Distribution Center - Giza\n    batch 25: Loratadex, status=Recalled, made 2026-07-29, at Distribution Center - Giza\n\nCO-LOCATED (same storage location \u2014 weakest linkage)\n    batch 15: Amoxiclav 625, status=Distributed, made 2026-03-23, at Distribution Center - Alexandria\n    batch 16: Amoxiclav 625, status=Recalled, made 2026-03-24, at Distribution Center - Alexandria\n\nALREADY RECALLED (Product_Recall.BatchID is UNIQUE; a second recall row is impossible for these): [4, 10, 16, 25]\n\nVALID IDS \u2014 every id in your answer must come from these lists\n  Active QA Managers (only these may authorize a recall):\n    EmployeeID 7: Dina Farouk (QA Manager)\n  Active Production Staff (only these may own a production order):\n    EmployeeID 2: Youssef Hassan (Production Staff)\n    EmployeeID 3: Mona Adel (Production Staff)\n    EmployeeID 8: Ahmed Salah (Operations Manager)\n  Suppliers (supplier 1 is IMPLICATED \u2014 do not re-order from it):\n    SupplierID 1: PharmaRaw Egypt   <-- IMPLICATED\n    SupplierID 2: ChemSource Ltd\n    SupplierID 3: GlassPack Industries\n    SupplierID 4: BioSupply Co.\n    SupplierID 5: PurePack Solutions\n  Medicines involved:\n    MedicineID 4: Ibuprex 400\n    MedicineID 6: Loratadex",
+      "usage": {
+        "llm_calls": 0,
+        "total_tokens": 0,
+        "latency_seconds": 0.0
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    },
+    {
+      "id": "t2_scope",
+      "title": "classify_scope",
+      "subtask_type": "ambiguous_ranking",
+      "planner": "tree_of_thoughts",
+      "output": "{\"action\": \"classify_scope\", \"batch_id\": 22, \"tier\": \"CONTAIN\", \"justification\": \"Sibling cohort batch with same production order (17) and immediate production timeline (2026-07-26) to batch 21. High risk of shared raw material contamination from PharmaRaw Egypt, warranting containment pending further sterility testing.\"}",
+      "usage": {
+        "llm_calls": 9,
+        "total_tokens": 13873,
+        "latency_seconds": 15.947
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {
+        "score_source": "model self-evaluation",
+        "candidates": [
+          {
+            "score": 0.95,
+            "rationale": "The candidate path correctly classifies batch 22 as 'CONTAIN' due to its direct linkage to the failed batch 21 via the same production order (17) and supplier (PharmaRaw Egypt). The justification is accurate and aligns with the cohort definitions: (a) strong evidence (same physical run and immediate production timeline) justifies the tier assignment. The rationale avoids over-containment by not extending the scope to unrelated batches (e.g., co-located batches 15/16) and correctly prioritizes the sibling cohort over weaker linkages. The only minor deduction is for the phrasing 'warranting containment pending further sterility testing,' which slightly overstates the immediate need for testing (the failure is already confirmed for batch 21, and batch 22 is approved but at risk). The tiering is feasible and progresses the investigation appropriately."
+          },
+          {
+            "score": 0.95,
+            "rationale": "The candidate path correctly classifies batch 23 as 'WATCH' with a justification that aligns with the provided database facts and the tiering criteria. The batch belongs to the supplier cohort (same supplier ID 1, PharmaRaw Egypt) and was produced within the manufacturing window of the implicated supplier, which introduces a material-linked risk. The justification appropriately notes the need for sterility testing due to potential cross-contamination risk while acknowledging the lack of direct evidence, which justifies the 'WATCH' tier rather than 'CONTAIN' or 'CLEAR'. The tiering is feasible and progresses the investigation by prioritizing monitoring over immediate containment. The only minor improvement would be to explicitly mention that batch 23 is not yet recalled (unlike batch 25 in the same cohort), which further supports the 'WATCH' classification."
+          }
+        ]
+      }
+    },
+    {
+      "id": "t3_action",
+      "title": "split_by_status",
+      "subtask_type": "single_pass_reasoning",
+      "planner": "plan_and_solve",
+      "output": "**PLAN**\n\n1. **Identify Batches by Status in CONTAIN Tier**\n   - From the provided data, extract all batches in the CONTAIN tier and group them by `BatchStatus`.\n   - The relevant statuses are:\n     - `Distributed`\n     - `In Production`, `Pending QA`, or `Approved`\n\n2. **Determine Actions Based on Status**\n   - For batches with status `Distributed`:\n     - Generate a `Product_Recall` row for each.\n     - Ensure the `BatchID` is not already recalled (check against `[4, 10, 16, 25]`).\n   - For batches with status `In Production`, `Pending QA`, or `Approved`:\n     - Change their `BatchStatus` to `Rejected`.\n     - No `Product_Recall` row is needed.\n\n3. **Calculate Total Quantity Affected per Medicine**\n   - Sum the quantities for each medicine across the affected batches.\n   - Note: The problem does not provide explicit quantities, so we assume each batch represents a single unit unless otherwise specified. If quantities are required, they should be inferred or requested.\n\n4. **Validate Against Constraints**\n   - Ensure no duplicate `Product_Recall` rows are created for already recalled batches.\n   - Confirm that only valid IDs (e.g., EmployeeID, SupplierID) are referenced.\n\n5. **Output the Results**\n   - List batches requiring `Product_Recall` and those requiring `BatchStatus` change to `Rejected`.\n   - Report the total quantity affected per medicine.\n\n---\n\n**SOLUTION**\n\n### Step 1: Identify Batches in CONTAIN Tier by Status\nFrom the provided data, the CONTAIN tier batches are:\n- **Distributed**:\n  - Batch 21: Ibuprex 400\n  - Batch 23: Loratadex\n  - Batch 15: Amoxiclav 625\n- **Approved** (treated as equivalent to `In Production`/`Pending QA` for this task):\n  - Batch 22: Ibuprex 400\n\n### Step 2: Apply Actions Based on Status\n#### Batches Requiring `Product_Recall` (Status = `Distributed`):\n1. **Batch 21**: Ibuprex 400\n   - Not already recalled (`BatchID` 21 not in `[4, 10, 16, 25]`).\n   - **Action**: Create `Product_Recall` row.\n     - `BatchID`: 21\n     - `RecallDate`: Current date (or date of discovery, e.g., 2026-08-10)\n     - `Reason`: Sterility failure (microbial growth)\n     - `AuthorizedBy`: EmployeeID 7 (Dina Farouk, QA Manager)\n     - `Notes`: Excursion traced to raw material from SupplierID 1 (PharmaRaw Egypt).\n\n2. **Batch 23**: Loratadex\n   - Not already recalled (`BatchID` 23 not in `[4, 10, 16, 25]`).\n   - **Action**: Create `Product_Recall` row.\n     - `BatchID`: 23\n     - `RecallDate`: Current date\n     - `Reason`: Supplier cohort (PharmaRaw Egypt implicated)\n     - `AuthorizedBy`: EmployeeID 7 (Dina Farouk)\n     - `Notes`: Linked to same supplier as failed batch 21.\n\n3. **Batch 15**: Amoxiclav 625\n   - Not already recalled (`BatchID` 15 not in `[4, 10, 16, 25]`).\n   - **Action**: Create `Product_Recall` row.\n     - `BatchID`: 15\n     - `RecallDate`: Current date\n     - `Reason`: Co-located with recalled batch 16 (same storage)\n     - `AuthorizedBy`: EmployeeID 7 (Dina Farouk)\n     - `Notes`: Weakest linkage (same location as recalled batch).\n\n#### Batches Requiring `BatchStatus` Change to `Rejected` (Status = `Approved`):\n1. **Batch 22**: Ibuprex 400\n   - **Action**: Update `BatchStatus` to `Rejected`.\n     - No `Product_Recall` needed (status not `Distributed`).\n\n### Step 3: Calculate Total Quantity Affected per Medicine\n- **Ibuprex 400**:\n  - Batch 21: 1 unit (Product_Recall)\n  - Batch 22: 1 unit (Rejected)\n  - **Total**: 2 units\n- **Loratadex**:\n  - Batch 23: 1 unit (Product_Recall)\n  - **Total**: 1 unit\n- **Amoxiclav 625**:\n  - Batch 15: 1 unit (Product_Recall)\n  - **Total**: 1 unit\n\n### Step 4: Validate Constraints\n- No duplicate `Product_Recall` rows are created for batches already recalled (`[4, 10, 16, 25]`).\n- All actions use valid IDs (e.g., EmployeeID 7 for recall authorization).\n\n---\n\n### Final Output:\n#### Batches Requiring `Product_Recall`:\n1. Batch 21: Ibuprex 400\n2. Batch 23: Loratadex\n3. Batch 15: Amoxiclav 625\n\n#### Batches Requiring `BatchStatus` Change to `Rejected`:\n1. Batch 22: Ibuprex 400\n\n#### Total Quantity Affected per Medicine:\n- **Ibuprex 400**: 2 units\n- **Loratadex**: 1 unit\n- **Amoxiclav 625**: 1 unit",
+      "usage": {
+        "llm_calls": 1,
+        "total_tokens": 2719,
+        "latency_seconds": 7.637
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    },
+    {
+      "id": "t4_supply",
+      "title": "assess_shortfall",
+      "subtask_type": "single_pass_reasoning",
+      "planner": "plan_and_solve",
+      "output": "### PLAN\n\n1. **Identify Contained Batches**:\n   - From the provided data, extract all batches in the CONTAIN tier (as classified in `t2_scope`).\n   - The relevant batches are:\n     - Batch 21: Ibuprex 400 (Distributed)\n     - Batch 22: Ibuprofen 400 (Approved)\n     - Batch 23: Loratadex (Distributed)\n     - Batch 15: Amoxiclav 625 (Distributed)\n\n2. **Determine Shortfall per Medicine**:\n   - For each medicine, calculate the total quantity of affected batches.\n   - Check if any open `Production_Order` already covers the gap (none are mentioned in the data, so assume no coverage).\n   - The shortfall is the total quantity of affected batches per medicine.\n\n3. **Validate Against Constraints**:\n   - Ensure no duplicate actions for already recalled batches (`[4, 10, 16, 25]`).\n   - Confirm that only valid IDs are referenced (e.g., EmployeeID, SupplierID).\n\n4. **Output the Results**:\n   - Report the shortfall figure per medicine.\n\n---\n\n### SOLUTION\n\n#### Step 1: Identify Contained Batches\nThe CONTAIN tier batches are:\n- Batch 21: Ibuprex 400 (Distributed)\n- Batch 22: Ibuprex 400 (Approved)\n- Batch 23: Loratadex (Distributed)\n- Batch 15: Amoxiclav 625 (Distributed)\n\n#### Step 2: Calculate Shortfall per Medicine\n- **Ibuprex 400**:\n  - Batch 21: 1 unit (Distributed)\n  - Batch 22: 1 unit (Approved)\n  - **Total Affected**: 2 units\n  - **Shortfall**: 2 units (no open `Production_Order` covers this gap).\n\n- **Loratadex**:\n  - Batch 23: 1 unit (Distributed)\n  - **Total Affected**: 1 unit\n  - **Shortfall**: 1 unit (no open `Production_Order` covers this gap).\n\n- **Amoxiclav 625**:\n  - Batch 15: 1 unit (Distributed)\n  - **Total Affected**: 1 unit\n  - **Shortfall**: 1 unit (no open `Production_Order` covers this gap).\n\n#### Step 3: Validate Constraints\n- No duplicate actions for already recalled batches (`[4, 10, 16, 25]`).\n- All actions use valid IDs (e.g., EmployeeID 7 for recall authorization).\n\n---\n\n### Final Output:\n#### Shortfall per Medicine:\n- **Ibuprex 400**: 2 units\n- **Loratadex**: 1 unit\n- **Amoxiclav 625**: 1 unit",
+      "usage": {
+        "llm_calls": 1,
+        "total_tokens": 3330,
+        "latency_seconds": 3.617
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    },
+    {
+      "id": "t5_plan",
+      "title": "plan_containment",
+      "subtask_type": "high_branch_validated",
+      "planner": "lats",
+      "output": "{\"reject_batch_ids\": [22], \"recall_batch_ids\": [21, 23], \"recall_authorizer_employee_id\": 7, \"recall_reason\": \"Sterility test failure (microbial growth) linked to raw material from implicated supplier PharmaRaw Egypt (SupplierID 1).\", \"replacement_orders\": [{\"medicine_id\": 4, \"supplier_id\": 3, \"planned_quantity\": 2, \"responsible_employee_id\": 8}, {\"medicine_id\": 6, \"supplier_id\": 5, \"planned_quantity\": 1, \"responsible_employee_id\": 2}], \"watch_batch_ids\": [25, 16, 10, 4, 15], \"rationale\": \"Batch 22 (Ibuprex 400) is still inside the plant (Approved status) and must be rejected to prevent further risk. Batches 21 (Ibuprex 400) and 23 (Loratadex) have been distributed to customers and must be recalled due to potential contamination from the implicated supplier. Batch 15 (Amoxiclav 625) is co-located with a recalled batch (16) and, while not directly implicated, is flagged for watch due to weakest linkage (same storage location). Batches 25, 16, 10, and 4 are already recalled and require no further action but are noted for tracking. Replacement orders are raised for Ibuprex 400 (2 units) using GlassPack Industries (SupplierID 3) and Loratadex (1 unit) using PurePack Solutions (SupplierID 5), avoiding the implicated supplier. Ahmed Salah (EmployeeID 8) and Youssef Hassan (EmployeeID 2), Production Staff, are assigned to oversee the replacement orders. Dina Farouk (EmployeeID 7), a QA Manager, authorizes the recalls.\"",
+      "usage": {
+        "llm_calls": 4,
+        "total_tokens": 17988,
+        "latency_seconds": 15.321
+      },
+      "grounded_score": 1.0,
+      "grounded_success": true,
+      "grounded_checks": [
+        {
+          "name": "impact_completeness",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "all 4 linked batches accounted for (1 sibling, 3 supplier-linked)"
+        },
+        {
+          "name": "no_implicated_supplier_reuse",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "no replacement order uses the implicated supplier"
+        },
+        {
+          "name": "recall_eligibility",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "2 recall(s) and 1 rejection(s) match batch status"
+        },
+        {
+          "name": "no_duplicate_recall",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "no existing recall rows"
+        },
+        {
+          "name": "recall_authorizer",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "Dina Farouk is an Active QA Manager"
+        },
+        {
+          "name": "order_owner",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "all order owners active and eligible"
+        },
+        {
+          "name": "payload_validation",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "2 payload(s) validate"
+        },
+        {
+          "name": "no_over_scoping",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "all 3 contained batches have production or material linkage"
+        },
+        {
+          "name": "json_repaired",
+          "passed": true,
+          "skipped": false,
+          "critical": false,
+          "weight": 0.0,
+          "detail": "candidate was truncated mid-object and closed programmatically; no values were invented"
+        }
+      ],
+      "search_detail": {
+        "score_source": "grounded VelloraEnvironment",
+        "tree": [
+          {
+            "id": "n0",
+            "parent_id": null,
+            "action": "root",
+            "state": "No attempt yet.",
+            "visits": 2,
+            "mean_value": 0.903125,
+            "environment_score": 0.0,
+            "model_score": 0.0,
+            "feedback": null,
+            "reflections": []
+          },
+          {
+            "id": "n1",
+            "parent_id": "n0",
+            "action": "plan_containment",
+            "state": "{\"reject_batch_ids\": [22], \"recall_batch_ids\": [21, 23, 15], \"recall_authorizer_employee_id\": 7, \"recall_reason\": \"Sterility test failure (microbial growth) linked to raw material from implicated supplier PharmaRaw Egypt (SupplierID 1).\", \"replacement_orders\": [{\"medicine_id\": 4, \"supplier_id\": 2, \"planned_quantity\": 2, \"responsible_employee_id\": 2}, {\"medicine_id\": 6, \"supplier_id\": 4, \"planned_quantity\": 1, \"responsible_employee_id\": 3}], \"watch_batch_ids\": [25, 16, 10, 4], \"rationale\": \"Batch 22 (Ibuprex 400) is still inside the plant (Approved status) and must be rejected to prevent further risk. Batches 21 (Ibuprex 400), 23 (Loratadex), and 15 (Amoxiclav 625) have been distributed to customers and must be recalled due to potential contamination from the implicated supplier. Batches 25, 16, 10, and 4 are already recalled and require no further action but are noted for tracking. Replacement orders are raised for Ibuprex 400 (2 units) and Loratadex (1 unit) using non-implicated suppliers (ChemSource Ltd and BioSupply Co., respectively). Dina Farouk (EmployeeID 7), a QA Manager, authorizes the recalls. Youssef Hassan and Mona Adel, Production Staff, are assigned to oversee the replacement orders.\"",
+            "visits": 1,
+            "mean_value": 0.80625,
+            "environment_score": 0.875,
+            "model_score": 0.6,
+            "feedback": {
+              "success": false,
+              "score": 0.875,
+              "details": [
+                "[no_over_scoping] contained without production linkage: batch 15 (Amoxiclav 625, supplier 2, made 2026-03-23). These share neither the failed production order nor supplier 1 inside the 14-day window. Containing them scraps saleable stock. Co-location alone is not evidence of contamination."
+              ]
+            },
+            "reflections": [
+              "### Branch-Level LATS Reflection on Environment Feedback\n\n**Linking (L):**\nThe initial containment plan included **batch 15 (Amoxiclav 625)** in the recall list due to its co-location with a recalled batch (batch 16) at the same storage facility. However, the external feedback correctly identified that co-location alone does not establish contamination risk, especially since:\n- Batch 15 was produced on **2026-03-23**, far outside the 14-day manufacturing window of the implicated supplier (PharmaRaw Egypt, SupplierID 1).\n- It does not share the same production order (17) or supplier (SupplierID 1) as the failed batch (21).\n- The linkage to the contamination event is **non-existent**, making containment unnecessary.\n\n**Analyzing (A):**\nThe feedback highlights a **false positive** in the containment scope. The initial assumption that co-location equates to contamination risk was overly cautious and not grounded in evidence. The **14-day window** and **supplier linkage** are critical constraints that were overlooked in the first iteration.\n\n**Testing (T):**\nTo validate the feedback:\n1. **Time Window Check**: Batch 15 was produced **4 months prior** to the implicated batch (21), making shared raw material contamination impossible.\n2. **Supplier Check**: Batch 15\u2019s supplier (SupplierID 2, ChemSource Ltd) is **not implicated** in the sterility failure.\n3. **Production Order Check**: Batch 15 is unrelated to production order 17, which used SupplierID 1.\n\n**Synthesizing (S):**\nThe initial plan **over-scoped** containment by including batch 15, which should not have been recalled. A corrected plan should:\n- **Exclude batch 15** from recalls and rejections.\n- **Focus containment strictly on batches with direct linkage** to the failed production order (17) or implicated supplier (SupplierID 1).\n- **Retain batch 22 (Ibuprex 400, Approved)** for rejection since it shares the same production order (17) and timeline.\n- **Retain batches 21 (Ibuprex 400) and 23 (Loratadex)** for recall due to direct supplier linkage.\n\n### Corrected Plan (Post-Feedback)\n```json\n{\n  \"reject_batch_ids\": [22],\n  \"recall_batch_ids\": [21, 23],\n  \"recall_authorizer_employee_id\": 7,\n  \"recall_reason\": \"Sterility test failure (microbial growth) linked to raw material from implicated supplier PharmaRaw Egypt (SupplierID 1).\",\n  \"replacement_orders\": [\n    {\n      \"medicine_id\": 4,\n      \"supplier_id\": 2,\n      \"planned_quantity\": 2,\n      \"responsible_employee_id\": 2\n    },\n    {\n      \"medicine_id\": 6,\n      \"supplier_id\": 4,\n      \"planned_quantity\": 1,\n      \"responsible_employee_id\": 3\n    }\n  ],\n  \"watch_batch_ids\": [25, 16, 10, 4, 15],\n  \"rationale\": \"Batch 22 (Ibuprex 400) is still inside the plant (Approved status) and must be rejected to prevent further risk. Batches 21 (Ibuprex 400) and 23 (Loratadex) have been distributed to customers and must be recalled due to potential contamination from the implicated supplier. Batch 15 (Amoxiclav 625) is excluded from containment as it shares no linkage (supplier, production order, or timeline) with the failed batch. Batches 25, 16, 10, and 4 are already recalled and require no further action but are noted for tracking. Replacement orders are raised for Ibuprex 400 (2 units) and Loratadex (1 unit) using non-implicated suppliers (ChemSource Ltd and BioSupply Co., respectively). Dina Farouk (EmployeeID 7), a QA Manager, authorizes the recalls. Youssef Hassan and Mona Adel, Production Staff, oversee the replacement orders.\"\n}\n```\n\n### Key Takeaways for Future Expansion\n1. **Stricter Linkage Criteria**: Containment should only include batches with **direct evidence of risk** (e.g., same production order, implicated supplier, or tight timeline). Co-location alone is insufficient.\n2. **Time-Window Validation**: Always verify that batches fall within the **contamination risk window** (e.g., 14 days of the implicated batch).\n3. **Supplier-Specific Checks**: Ensure no batches from **non-implicated suppliers** are unnecessarily contained.\n4. **Feedback Integration**: Use external feedback to **refine scope** and avoid over-containment, which wastes resources and scraps saleable stock.\n\nThis reflection ensures future containment plans are **evidence-based** and **proportionate** to the actual risk."
+            ]
+          },
+          {
+            "id": "n2",
+            "parent_id": "n0",
+            "action": "plan_containment",
+            "state": "{\"reject_batch_ids\": [22], \"recall_batch_ids\": [21, 23], \"recall_authorizer_employee_id\": 7, \"recall_reason\": \"Sterility test failure (microbial growth) linked to raw material from implicated supplier PharmaRaw Egypt (SupplierID 1).\", \"replacement_orders\": [{\"medicine_id\": 4, \"supplier_id\": 3, \"planned_quantity\": 2, \"responsible_employee_id\": 8}, {\"medicine_id\": 6, \"supplier_id\": 5, \"planned_quantity\": 1, \"responsible_employee_id\": 2}], \"watch_batch_ids\": [25, 16, 10, 4, 15], \"rationale\": \"Batch 22 (Ibuprex 400) is still inside the plant (Approved status) and must be rejected to prevent further risk. Batches 21 (Ibuprex 400) and 23 (Loratadex) have been distributed to customers and must be recalled due to potential contamination from the implicated supplier. Batch 15 (Amoxiclav 625) is co-located with a recalled batch (16) and, while not directly implicated, is flagged for watch due to weakest linkage (same storage location). Batches 25, 16, 10, and 4 are already recalled and require no further action but are noted for tracking. Replacement orders are raised for Ibuprex 400 (2 units) using GlassPack Industries (SupplierID 3) and Loratadex (1 unit) using PurePack Solutions (SupplierID 5), avoiding the implicated supplier. Ahmed Salah (EmployeeID 8) and Youssef Hassan (EmployeeID 2), Production Staff, are assigned to oversee the replacement orders. Dina Farouk (EmployeeID 7), a QA Manager, authorizes the recalls.\"",
+            "visits": 1,
+            "mean_value": 1.0,
+            "environment_score": 1.0,
+            "model_score": 1.0,
+            "feedback": {
+              "success": true,
+              "score": 1.0,
+              "details": [
+                "All grounded checks passed."
+              ]
+            },
+            "reflections": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "t6_notice",
+      "title": "draft_notices",
+      "subtask_type": "cheap_revisable_text",
+      "planner": "plan_and_solve",
+      "output": "### PLAN\n\n1. **Understand the Problem**:\n   - We need to draft two notices:\n     1. A **recall reason text** for external stakeholders (e.g., customers, regulators).\n     2. An **internal QA deviation notice** for employees and management.\n   - The notices must include:\n     - Failed batch details (batch 21: Ibuprex 400, sterility test failure).\n     - Impacted cohorts (sibling, supplier, co-located batches) and their inclusion/exclusion rationale.\n     - Containment actions with owners.\n     - Replacement plan.\n     - Authorizing QA Manager (EmployeeID 7: Dina Farouk).\n     - Hypotheses must be explicitly marked as hypotheses.\n\n2. **Structure the Notices**:\n   - **Recall Reason Text**:\n     - Clear, concise, and actionable for external audiences.\n     - Include batch details, reason for recall, and safety instructions.\n   - **Internal QA Deviation Notice**:\n     - Detailed technical and operational information.\n     - Include all cohorts, containment actions, replacement plan, and ownership.\n\n3. **Validate Against Constraints**:\n   - Ensure no contradictions with provided data.\n   - Use only valid IDs (e.g., EmployeeID 7 for QA Manager).\n   - Mark hypotheses explicitly (e.g., \"This is a hypothesis: ...\").\n\n4. **Draft the Notices**:\n   - Write the recall reason text and internal QA deviation notice based on the above.\n\n---\n\n### SOLUTION\n\n---\n\n#### **Recall Reason Text (External Notice)**\n**Subject**: Urgent Recall of Ibuprex 400 (Batch 21) and Related Products\n\n**To**: Healthcare Providers, Pharmacists, and Patients\n**From**: Vellora Quality Assurance\n**Date**: [Current Date]\n**Reference**: Recall Notice #2026-08-10\n\n**Reason for Recall**:\nVellora is initiating a voluntary recall of the following products due to a potential sterility failure linked to a raw material from our supplier, PharmaRaw Egypt (SupplierID 1):\n\n1. **Ibuprex 400 (Batch 21)**\n   - Manufactured: 2026-07-25\n   - Distributed: Yes\n   - Issue: Microbial growth observed during sterility testing on 2026-08-10. The contamination is traced to the raw material intake for this production order.\n\n**Additional Products Under Precautionary Review**:\n- **Loratadex (Batch 23)**: Manufactured 2026-07-28 (Distributed) \u2013 linked to the same supplier.\n- **Amoxiclav 625 (Batch 15)**: Manufactured 2026-03-23 (Distributed) \u2013 co-located with a previously recalled batch (Batch 16) in the same storage facility.\n\n**Safety Instructions**:\n- **Do not use** the recalled batches.\n- Return all unused product to Vellora or dispose of it in accordance with local regulations.\n- For questions or concerns, contact Vellora\u2019s Recall Hotline at [Phone Number] or email [RecallEmail@Vellora.com].\n\n**Next Steps**:\nVellora is working to replace the recalled batches with products from alternative suppliers. We will provide updates on replacement timelines and availability.\n\n**We apologize for any inconvenience and appreciate your cooperation.**\n\n**Authorized by**:\nDina Farouk\nQA Manager, Vellora\nEmployeeID: 7\n\n---\n\n#### **Internal QA Deviation Notice**\n\n**Subject**: Deviation Notice \u2013 Sterility Failure in Ibuprex 400 (Batch 21)\n**Notice ID**: QA-DEV-2026-08-10\n**Date**: [Current Date]\n**Authorized by**: Dina Farouk (QA Manager, EmployeeID 7)\n\n---\n\n### **1. Failed Batch Details**\n- **Batch ID**: 21\n- **Product**: Ibuprex 400 (MedicineID 4)\n- **Status**: Distributed\n- **Manufactured**: 2026-07-25\n- **Production Order**: 17\n- **Supplier**: PharmaRaw Egypt (SupplierID 1)\n- **Failed Test**: Sterility Test (2026-08-10)\n- **Remarks**: Microbial growth observed in two of six settle plates. Excursion traced to raw material intake for Production Order 17.\n\n---\n\n### **2. Impacted Cohorts and Rationale**\n\n#### **A. Sibling Cohort (Same Production Order)**\n- **Batch 22**: Ibuprex 400 (MedicineID 4)\n  - **Status**: Approved\n  - **Manufactured**: 2026-07-26\n  - **Location**: Warehouse A - Cairo\n  - **Inclusion Rationale**: Same production order (17) and immediate production timeline as Batch 21. High risk of shared raw material contamination.\n  - **Action**: Reject Batch 22 (change status to `Rejected`).\n\n#### **B. Supplier Cohort (Same Supplier, Manufacturing Window)**\n- **Batch 23**: Loratadex (MedicineID 6)\n  - **Status**: Distributed\n  - **Manufactured**: 2026-07-28\n  - **Location**: Distribution Center - Giza\n  - **Inclusion Rationale**: Linked to PharmaRaw Egypt (SupplierID 1), the implicated supplier.\n  - **Action**: Recall Batch 23.\n- **Batch 25**: Loratadex (MedicineID 6)\n  - **Status**: Recalled (already recalled)\n  - **Inclusion Rationale**: Already recalled; no further action required.\n\n#### **C. Co-Located Cohort (Same Storage Location)**\n- **Batch 15**: Amoxiclav 625\n  - **Status**: Distributed\n  - **Manufactured**: 2026-03-23\n  - **Location**: Distribution Center - Alexandria\n  - **Inclusion Rationale**: Co-located with Batch 16 (Amoxiclav 625), which was previously recalled. Weakest linkage due to shared storage.\n  - **Action**: Recall Batch 15.\n- **Batch 16**: Amoxiclav 625\n  - **Status**: Recalled (already recalled)\n  - **Inclusion Rationale**: Already recalled; no further action required.\n- **Batches 4 and 10**:\n  - **Status**: Recalled (already recalled)\n  - **Inclusion Rationale**: Already recalled; no further action required.\n\n---\n\n### **3. Containment Actions**\n\n| **Batch ID** | **Product**       | **Action**               | **Owner**                     | **Status**       |\n|--------------|-------------------|--------------------------|-------------------------------|------------------|\n| 21           | Ibuprex 400       | Recall                   | Dina Farouk (QA Manager)      | Recalled         |\n| 22           | Ibuprex 400       | Reject (change status)   | Youssef Hassan (EmployeeID 2) | Rejected         |\n| 23           | Loratadex         | Recall                   | Dina Farouk                   | Recalled         |\n| 15           | Amoxiclav 625     | Recall                   | Dina Farouk                   | Recalled         |\n\n---\n\n### **4. Replacement Plan**\nTo mitigate supply chain disruption, the following replacement orders have been initiated:\n\n| **Medicine**   | **Planned Quantity** | **Supplier**               | **Responsible Owner**       |\n|----------------|----------------------|----------------------------|-----------------------------|\n| Ibuprex 400    | 2 units              | GlassPack Industries (SupplierID 3) | Ahmed Salah (EmployeeID 8) |\n| Loratadex      | 1 unit               | PurePack Solutions (SupplierID 5)  | Youssef Hassan (EmployeeID 2) |\n\n**Notes**:\n- Avoid using PharmaRaw Egypt (SupplierID 1) due to implicated contamination risk.\n- Replacement orders are prioritized to cover the shortfall from recalled batches.\n\n---\n\n### **5. Hypotheses**\n- **Hypothesis 1**: The microbial growth in Batch 21 is directly linked to the raw material from PharmaRaw Egypt (SupplierID 1). *Verification pending further root cause analysis.*\n- **Hypothesis 2**: Batch 15 (Amoxiclav 625) may have been indirectly contaminated due to shared storage with Batch 16 (already recalled). *This is a weak linkage and requires further investigation.*\n- **Hypothesis 3**: No other batches from Production Order 17 are affected beyond Batches 21 and 22. *Assumption based on available data; further testing may be required.*\n\n---\n\n### **6. Authorizing QA Manager**\n- **Name**: Dina Farouk\n- **EmployeeID**: 7\n- **Role**: QA Manager\n\n---\n**End of Notice**",
+      "usage": {
+        "llm_calls": 1,
+        "total_tokens": 5787,
+        "latency_seconds": 12.242
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    },
+    {
+      "id": "t7_commit",
+      "title": "commit",
+      "subtask_type": "write_gate",
+      "planner": "direct_tool_call",
+      "output": "FAILED BATCH\n    batch 21: Ibuprex 400, status=Distributed, made 2026-07-25\n    production order 17, supplier 1 (PharmaRaw Egypt)\n    failed test: Sterility Test on 2026-08-10\n    remarks: Microbial growth observed in two of six settle plates. Excursion traced to the raw material intake for this production order.\n\nSIBLING COHORT (same production order \u2014 same physical run)\n    batch 22: Ibuprex 400, status=Approved, made 2026-07-26, at Warehouse A - Cairo\n\nSUPPLIER COHORT (same supplier, within the manufacturing window)\n    batch 23: Loratadex, status=Distributed, made 2026-07-28, at Distribution Center - Giza\n    batch 25: Loratadex, status=Recalled, made 2026-07-29, at Distribution Center - Giza\n\nCO-LOCATED (same storage location \u2014 weakest linkage)\n    batch 15: Amoxiclav 625, status=Distributed, made 2026-03-23, at Distribution Center - Alexandria\n    batch 16: Amoxiclav 625, status=Recalled, made 2026-03-24, at Distribution Center - Alexandria\n\nALREADY RECALLED (Product_Recall.BatchID is UNIQUE; a second recall row is impossible for these): [4, 10, 16, 25]\n\nVALID IDS \u2014 every id in your answer must come from these lists\n  Active QA Managers (only these may authorize a recall):\n    EmployeeID 7: Dina Farouk (QA Manager)\n  Active Production Staff (only these may own a production order):\n    EmployeeID 2: Youssef Hassan (Production Staff)\n    EmployeeID 3: Mona Adel (Production Staff)\n    EmployeeID 8: Ahmed Salah (Operations Manager)\n  Suppliers (supplier 1 is IMPLICATED \u2014 do not re-order from it):\n    SupplierID 1: PharmaRaw Egypt   <-- IMPLICATED\n    SupplierID 2: ChemSource Ltd\n    SupplierID 3: GlassPack Industries\n    SupplierID 4: BioSupply Co.\n    SupplierID 5: PurePack Solutions\n  Medicines involved:\n    MedicineID 4: Ibuprex 400\n    MedicineID 6: Loratadex",
+      "usage": {
+        "llm_calls": 0,
+        "total_tokens": 0,
+        "latency_seconds": 0.0
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    }
+  ],
+  "final_output": "FAILED BATCH\n    batch 21: Ibuprex 400, status=Distributed, made 2026-07-25\n    production order 17, supplier 1 (PharmaRaw Egypt)\n    failed test: Sterility Test on 2026-08-10\n    remarks: Microbial growth observed in two of six settle plates. Excursion traced to the raw material intake for this production order.\n\nSIBLING COHORT (same production order \u2014 same physical run)\n    batch 22: Ibuprex 400, status=Approved, made 2026-07-26, at Warehouse A - Cairo\n\nSUPPLIER COHORT (same supplier, within the manufacturing window)\n    batch 23: Loratadex, status=Distributed, made 2026-07-28, at Distribution Center - Giza\n    batch 25: Loratadex, status=Recalled, made 2026-07-29, at Distribution Center - Giza\n\nCO-LOCATED (same storage location \u2014 weakest linkage)\n    batch 15: Amoxiclav 625, status=Distributed, made 2026-03-23, at Distribution Center - Alexandria\n    batch 16: Amoxiclav 625, status=Recalled, made 2026-03-24, at Distribution Center - Alexandria\n\nALREADY RECALLED (Product_Recall.BatchID is UNIQUE; a second recall row is impossible for these): [4, 10, 16, 25]\n\nVALID IDS \u2014 every id in your answer must come from these lists\n  Active QA Managers (only these may authorize a recall):\n    EmployeeID 7: Dina Farouk (QA Manager)\n  Active Production Staff (only these may own a production order):\n    EmployeeID 2: Youssef Hassan (Production Staff)\n    EmployeeID 3: Mona Adel (Production Staff)\n    EmployeeID 8: Ahmed Salah (Operations Manager)\n  Suppliers (supplier 1 is IMPLICATED \u2014 do not re-order from it):\n    SupplierID 1: PharmaRaw Egypt   <-- IMPLICATED\n    SupplierID 2: ChemSource Ltd\n    SupplierID 3: GlassPack Industries\n    SupplierID 4: BioSupply Co.\n    SupplierID 5: PurePack Solutions\n  Medicines involved:\n    MedicineID 4: Ibuprex 400\n    MedicineID 6: Loratadex",
+  "total_usage": {
+    "llm_calls": 16,
+    "prompt_tokens": 36287,
+    "completion_tokens": 7410,
+    "total_tokens": 43697,
+    "latency_seconds": 54.764
+  },
+  "wall_seconds": 66.837,
+  "error": ""
+}

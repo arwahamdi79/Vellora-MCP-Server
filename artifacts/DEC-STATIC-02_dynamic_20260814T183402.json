@@ -1,0 +1,167 @@
+{
+  "timestamp": "2026-08-14T18:34:02.856192+00:00",
+  "case_id": "DEC-STATIC-02",
+  "mode": "dynamic",
+  "goal": "Produce a QA summary: pass/fail counts per test type, and the list of batches with any failed test.",
+  "plan_task_ids": [
+    "dyn1"
+  ],
+  "execution_batches": [
+    [
+      "dyn1"
+    ]
+  ],
+  "dynamic_steps": [
+    {
+      "instruction": "Query the QA test results database for all test types and their pass/fail counts across all batches.",
+      "observation": "**QA Test Results Summary**\n\n| **Test Type**       | **Pass Count** | **Fail Count** |\n|---------------------|---------------|---------------|\n| Sterility Test      | 5             | 1             |\n| Endotoxin Test      | 6             | 0             |\n| Dissolution Test    | 6             | 0             |\n| Assay Test          | 6             | 0             |\n| Uniformity Test     | 6             | 0             |\n| Microbial Limit Test| 6             | 0             |\n\n**Batches with Failed Tests:**\n- **Batch 21**: Ibuprex 400 (Sterility Test failed on 2026-08-10)"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "dyn1",
+      "title": "Query the QA test results database for all test types and th",
+      "subtask_type": "dynamic_step",
+      "planner": "dynamic_decomposition",
+      "output": "**QA Test Results Summary**\n\n| **Test Type**       | **Pass Count** | **Fail Count** |\n|---------------------|---------------|---------------|\n| Sterility Test      | 5             | 1             |\n| Endotoxin Test      | 6             | 0             |\n| Dissolution Test    | 6             | 0             |\n| Assay Test          | 6             | 0             |\n| Uniformity Test     | 6             | 0             |\n| Microbial Limit Test| 6             | 0             |\n\n**Batches with Failed Tests:**\n- **Batch 21**: Ibuprex 400 (Sterility Test failed on 2026-08-10)",
+      "usage": {},
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    },
+    {
+      "id": "t5_plan",
+      "title": "plan_containment",
+      "subtask_type": "high_branch_validated",
+      "planner": "lats",
+      "output": "{\"reject_batch_ids\": [22], \"recall_batch_ids\": [21, 23], \"recall_authorizer_employee_id\": 7, \"recall_reason\": \"Sterility test failure linked to raw material from PharmaRaw Egypt (supplier 1) in batch 21, requiring recall of distributed batches 21 and 23.\", \"replacement_orders\": [{\"medicine_id\": 4, \"supplier_id\": 2, \"planned_quantity\": 5000, \"responsible_employee_id\": 2}, {\"medicine_id\": 6, \"supplier_id\": 3, \"planned_quantity\": 3000, \"responsible_employee_id\": 3}], \"watch_batch_ids\": [15, 16, 25], \"rationale\": \"Batch 21 failed the sterility test due to microbial growth traced to raw material from the implicated supplier (PharmaRaw Egypt). Batch 22 (same production run) is still inside the plant and must be rejected. Batch 23 (same supplier and manufacturing window) is distributed and must be recalled to prevent potential contamination. Batches 15, 16, and 25 are linked by storage location or supplier but are either already recalled or lack direct evidence of contamination, so they are placed under watch. Replacement orders for Ibuprex 400 and Loratadex are raised with non-implicated suppliers (ChemSource Ltd and GlassPack Industries) to avoid re-sourcing from the failed supplier. Dina Farouk (QA Manager) is authorized to approve the recalls.\"",
+      "usage": {
+        "llm_calls": 2,
+        "total_tokens": 3572,
+        "latency_seconds": 5.333
+      },
+      "grounded_score": 1.0,
+      "grounded_success": true,
+      "grounded_checks": [
+        {
+          "name": "impact_completeness",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "all 4 linked batches accounted for (1 sibling, 3 supplier-linked)"
+        },
+        {
+          "name": "no_implicated_supplier_reuse",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "no replacement order uses the implicated supplier"
+        },
+        {
+          "name": "recall_eligibility",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "2 recall(s) and 1 rejection(s) match batch status"
+        },
+        {
+          "name": "no_duplicate_recall",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "no existing recall rows"
+        },
+        {
+          "name": "recall_authorizer",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "Dina Farouk is an Active QA Manager"
+        },
+        {
+          "name": "order_owner",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "all order owners active and eligible"
+        },
+        {
+          "name": "payload_validation",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "2 payload(s) validate"
+        },
+        {
+          "name": "no_over_scoping",
+          "passed": true,
+          "skipped": false,
+          "critical": true,
+          "weight": 1.0,
+          "detail": "all 3 contained batches have production or material linkage"
+        },
+        {
+          "name": "json_repaired",
+          "passed": true,
+          "skipped": false,
+          "critical": false,
+          "weight": 0.0,
+          "detail": "candidate was truncated mid-object and closed programmatically; no values were invented"
+        }
+      ],
+      "search_detail": {
+        "score_source": "grounded VelloraEnvironment",
+        "tree": [
+          {
+            "id": "n0",
+            "parent_id": null,
+            "action": "root",
+            "state": "No attempt yet.",
+            "visits": 1,
+            "mean_value": 1.0,
+            "environment_score": 0.0,
+            "model_score": 0.0,
+            "feedback": null,
+            "reflections": []
+          },
+          {
+            "id": "n1",
+            "parent_id": "n0",
+            "action": "generate_containment_plan",
+            "state": "{\"reject_batch_ids\": [22], \"recall_batch_ids\": [21, 23], \"recall_authorizer_employee_id\": 7, \"recall_reason\": \"Sterility test failure linked to raw material from PharmaRaw Egypt (supplier 1) in batch 21, requiring recall of distributed batches 21 and 23.\", \"replacement_orders\": [{\"medicine_id\": 4, \"supplier_id\": 2, \"planned_quantity\": 5000, \"responsible_employee_id\": 2}, {\"medicine_id\": 6, \"supplier_id\": 3, \"planned_quantity\": 3000, \"responsible_employee_id\": 3}], \"watch_batch_ids\": [15, 16, 25], \"rationale\": \"Batch 21 failed the sterility test due to microbial growth traced to raw material from the implicated supplier (PharmaRaw Egypt). Batch 22 (same production run) is still inside the plant and must be rejected. Batch 23 (same supplier and manufacturing window) is distributed and must be recalled to prevent potential contamination. Batches 15, 16, and 25 are linked by storage location or supplier but are either already recalled or lack direct evidence of contamination, so they are placed under watch. Replacement orders for Ibuprex 400 and Loratadex are raised with non-implicated suppliers (ChemSource Ltd and GlassPack Industries) to avoid re-sourcing from the failed supplier. Dina Farouk (QA Manager) is authorized to approve the recalls.\"",
+            "visits": 1,
+            "mean_value": 1.0,
+            "environment_score": 1.0,
+            "model_score": 1.0,
+            "feedback": {
+              "success": true,
+              "score": 1.0,
+              "details": [
+                "All grounded checks passed."
+              ]
+            },
+            "reflections": []
+          }
+        ]
+      }
+    }
+  ],
+  "final_output": "{\"reject_batch_ids\": [22], \"recall_batch_ids\": [21, 23], \"recall_authorizer_employee_id\": 7, \"recall_reason\": \"Sterility test failure linked to raw material from PharmaRaw Egypt (supplier 1) in batch 21, requiring recall of distributed batches 21 and 23.\", \"replacement_orders\": [{\"medicine_id\": 4, \"supplier_id\": 2, \"planned_quantity\": 5000, \"responsible_employee_id\": 2}, {\"medicine_id\": 6, \"supplier_id\": 3, \"planned_quantity\": 3000, \"responsible_employee_id\": 3}], \"watch_batch_ids\": [15, 16, 25], \"rationale\": \"Batch 21 failed the sterility test due to microbial growth traced to raw material from the implicated supplier (PharmaRaw Egypt). Batch 22 (same production run) is still inside the plant and must be rejected. Batch 23 (same supplier and manufacturing window) is distributed and must be recalled to prevent potential contamination. Batches 15, 16, and 25 are linked by storage location or supplier but are either already recalled or lack direct evidence of contamination, so they are placed under watch. Replacement orders for Ibuprex 400 and Loratadex are raised with non-implicated suppliers (ChemSource Ltd and GlassPack Industries) to avoid re-sourcing from the failed supplier. Dina Farouk (QA Manager) is authorized to approve the recalls.\"",
+  "total_usage": {
+    "llm_calls": 5,
+    "prompt_tokens": 4973,
+    "completion_tokens": 994,
+    "total_tokens": 5967,
+    "latency_seconds": 5934.004
+  },
+  "wall_seconds": 5937.227,
+  "error": ""
+}
