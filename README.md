@@ -135,3 +135,49 @@ separately.
 - **Client:** Python · asyncio · `ClientSession` + `stdio_client`
 - **Storage:** SQLite (`db/vellora.db`), built from schema + seed SQL
 - **Policies:** Markdown files under `docs/policies/`, served as resources
+
+
+## Final Project Platform
+
+The final system adds three durable state graphs: **Batch Release**, **Recall Coordination**, and **Supplier CAPA**. Each graph persists checkpoints to SQLite and exposes a distinct HITL or failure-recovery path.
+
+### Run
+
+```bash
+python -m db.init_db
+python platform/app.py
+```
+
+Open `http://127.0.0.1:5000/chat` for the user surface and `/admin` for the admin surface.
+
+For a one-command startup:
+
+```bash
+chmod +x startup.sh
+./startup.sh
+```
+
+### Final Project requirements mapped to code
+
+- `state_graph/graphs.py` — three state graphs and technique pairings.
+- `state_graph/persistence.py` — durable checkpoints, HITL tasks, and failure tickets.
+- `state_graph/nodes/hitl_node.py` — HITL operations.
+- `state_graph/nodes/ticket_node.py` — failure-ticket operations.
+- `platform/app.py` — user chat/agent switching and admin surfaces.
+- `mcp_server/tool_registry.py` — runtime tool enable/disable backed by the shared database.
+- `rag/` — existing RAG subsystem.
+- `demos/` — HITL, ticket recovery, and crash/restart demonstrations.
+- `FINAL_PROJECT_SETUP_GUIDE.md` — detailed setup and demo instructions.
+
+### Demos
+
+```bash
+python demos/demo_hitl_pause.py --auto-approve
+python demos/demo_failure_ticket.py
+python demos/demo_crash_resume.py
+python demos/demo_crash_resume.py --resume
+```
+
+### Security
+
+Never commit `.env`, API keys, or database credentials. Required environment variables should be loaded with `os.getenv(...)`.
