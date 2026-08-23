@@ -1,2 +1,3 @@
-from .tool_registry import mcp, init_registry_table
-init_registry_table()
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("Vellora Therapeutics")

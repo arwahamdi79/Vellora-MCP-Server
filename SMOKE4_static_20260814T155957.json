@@ -1,0 +1,61 @@
+{
+  "timestamp": "2026-08-14T15:59:57.024045+00:00",
+  "case_id": "SMOKE4",
+  "mode": "static",
+  "goal": "Batch 21 failed its quality test. Contain the deviation: decide which linked batches to recall, which to reject, who authorizes the recalls, and what replacement production to raise.",
+  "plan_task_ids": [
+    "t1_trace",
+    "t2_scope",
+    "t3_action",
+    "t4_supply",
+    "t5_plan",
+    "t6_notice",
+    "t7_commit"
+  ],
+  "execution_batches": [
+    [
+      "t1_trace"
+    ],
+    [
+      "t2_scope"
+    ],
+    [
+      "t3_action"
+    ],
+    [
+      "t4_supply"
+    ],
+    [
+      "t5_plan"
+    ],
+    [
+      "t6_notice"
+    ],
+    [
+      "t7_commit"
+    ]
+  ],
+  "dynamic_steps": [],
+  "nodes": [
+    {
+      "id": "t1_trace",
+      "title": "trace_impact",
+      "subtask_type": "deterministic_lookup",
+      "planner": "direct_tool_call",
+      "output": "FAILED BATCH\n    batch 21: Ibuprex 400, status=Distributed, made 2026-07-25\n    production order 17, supplier 1 (PharmaRaw Egypt)\n    failed test: Sterility Test on 2026-08-10\n    remarks: Microbial growth observed in two of six settle plates. Excursion traced to the raw material intake for this production order.\n\nSIBLING COHORT (same production order \u2014 same physical run)\n    batch 22: Ibuprex 400, status=Approved, made 2026-07-26, at Warehouse A - Cairo\n\nSUPPLIER COHORT (same supplier, within the manufacturing window)\n    batch 23: Loratadex, status=Distributed, made 2026-07-28, at Distribution Center - Giza\n    batch 25: Loratadex, status=Recalled, made 2026-07-29, at Distribution Center - Giza\n\nCO-LOCATED (same storage location \u2014 weakest linkage)\n    batch 15: Amoxiclav 625, status=Distributed, made 2026-03-23, at Distribution Center - Alexandria\n    batch 16: Amoxiclav 625, status=Recalled, made 2026-03-24, at Distribution Center - Alexandria\n\nALREADY RECALLED (Product_Recall.BatchID is UNIQUE; a second recall row is impossible for these): [4, 10, 16, 25]\n\nVALID IDS \u2014 every id in your answer must come from these lists\n  Active QA Managers (only these may authorize a recall):\n    EmployeeID 7: Dina Farouk (QA Manager)\n  Active Production Staff (only these may own a production order):\n    EmployeeID 2: Youssef Hassan (Production Staff)\n    EmployeeID 3: Mona Adel (Production Staff)\n    EmployeeID 8: Ahmed Salah (Operations Manager)\n  Suppliers (supplier 1 is IMPLICATED \u2014 do not re-order from it):\n    SupplierID 1: PharmaRaw Egypt   <-- IMPLICATED\n    SupplierID 2: ChemSource Ltd\n    SupplierID 3: GlassPack Industries\n    SupplierID 4: BioSupply Co.\n    SupplierID 5: PurePack Solutions\n  Medicines involved:\n    MedicineID 4: Ibuprex 400\n    MedicineID 6: Loratadex",
+      "usage": {
+        "llm_calls": 0,
+        "total_tokens": 0,
+        "latency_seconds": 0.0
+      },
+      "grounded_score": null,
+      "grounded_success": null,
+      "grounded_checks": [],
+      "search_detail": {}
+    }
+  ],
+  "final_output": "",
+  "total_usage": {},
+  "wall_seconds": 36.11,
+  "error": "HTTPStatusError: Error response 503 while fetching https://api.mistral.ai/v1/chat/completions: {\"object\":\"error\",\"message\":\"Service unavailable.\",\"type\":\"internal_server_error\",\"param\":null,\"code\":\"3800\",\"raw_status_code\":503}"
+}

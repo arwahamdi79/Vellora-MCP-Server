@@ -22,7 +22,6 @@ Everything else in this file is unchanged from the original.
 
 import os
 from .app import mcp
-from .tool_registry import registered_tool
 from pathlib import Path
 from typing import Optional
 from .elicitation import input_required
@@ -77,13 +76,13 @@ _anthropic_client = anthropic.Anthropic(
 # --------------------------------------------------
 
 
-@registered_tool()
+@mcp.tool()
 def get_medicines(employee_id: int):
     authorize(DB_PATH, employee_id, "get_medicines")
     return get_all_medicines()
 
 
-@registered_tool()
+@mcp.tool()
 def get_medicine(employee_id: int, medicine_id: int):
     """Return one medicine."""
     authorize(DB_PATH, employee_id, "get_medicine")
@@ -95,7 +94,7 @@ def get_medicine(employee_id: int, medicine_id: int):
 # --------------------------------------------------
 
 
-@registered_tool()
+@mcp.tool()
 def create_order(
     employee_id: Optional[int] = None,
     medicine_id: Optional[int] = None,
@@ -168,13 +167,13 @@ def create_order(
 # Batches
 # --------------------------------------------------
 
-@registered_tool()
+@mcp.tool()
 def get_batches(employee_id: int):
     authorize(DB_PATH, employee_id, "get_batches")
     return list_batches()
 
 
-@registered_tool()
+@mcp.tool()
 def change_batch_status(
     employee_id: int,
     batch_id: int,
@@ -237,7 +236,7 @@ Status changed to: {new_status}
 # --------------------------------------------------
 
 
-@registered_tool()
+@mcp.tool()
 def add_quality_test(
     employee_id: Optional[int] = None,
     batch_id: Optional[int] = None,
@@ -316,7 +315,7 @@ def add_quality_test(
     }
 
 
-@registered_tool()
+@mcp.tool()
 def get_quality_tests(employee_id: int):
     authorize(DB_PATH, employee_id, "get_quality_tests")
     return list_quality_tests()
@@ -327,7 +326,7 @@ def get_quality_tests(employee_id: int):
 # --------------------------------------------------
 
 
-@registered_tool()
+@mcp.tool()
 def create_recall(
     employee_id: Optional[int] = None,
     batch_id: Optional[int] = None,
@@ -396,7 +395,7 @@ def create_recall(
     }
 
 
-@registered_tool()
+@mcp.tool()
 def get_recalls(employee_id: int):
     authorize(DB_PATH, employee_id, "get_recalls")
     return list_recalls()
@@ -406,7 +405,7 @@ def get_recalls(employee_id: int):
 # Employees
 # --------------------------------------------------
 
-@registered_tool()
+@mcp.tool()
 def employee(employee_id: int):
     """Get employee information."""
     # FIX: this tool previously called get_employee() directly with no
@@ -421,7 +420,7 @@ def employee(employee_id: int):
     return get_employee(employee_id)
 
 
-@registered_tool()
+@mcp.tool()
 def get_batch_memory(
     employee_id: int,
     batch_id: int,
@@ -450,7 +449,7 @@ def get_batch_memory(
     )
 
 
-@registered_tool()
+@mcp.tool()
 def ask_knowledge_base(query: str, top_k: int = 3):
     """
     Answer a question from the knowledge base, checking the draft is

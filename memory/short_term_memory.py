@@ -194,12 +194,12 @@ class ShortTermMemory:
         result.reverse()
         return result
 
-    def strategy_zone_based_pruning(self, zones: Dict[str, int]) -> List[Message]:
+    def strategy_zone_based_pruning(self, zones: Optional[Dict[str, int]] = None) -> List[Message]:
         """
         Apply different retention limits per role, e.g.
-        {'system': 999, 'user': 5, 'assistant': 5, 'tool': 3}
+        {'system': 999, 'user': 5, 'assistant': 5, 'tool': 3} (the default).
         """
-        zones = {'system': 999, 'user': 5, 'assistant': 5, 'tool': 3, **zones}
+        zones = {'system': 999, 'user': 5, 'assistant': 5, 'tool': 3, **(zones or {})}
 
         by_role: Dict[str, List[Message]] = {}
         for msg in self.messages:
